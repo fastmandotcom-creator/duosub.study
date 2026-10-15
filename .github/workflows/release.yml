@@ -79,7 +79,7 @@ jobs:
 
       # The installer ships WITH the release: the script and the binaries it installs are always
       # the same version, served from immutable release assets (raw/main can be mid-push + cached).
-      - run: mkdir -p assets/dist && cp install.sh assets/dist/install.sh
+      - run: mkdir -p assets && cp install.sh assets/install.sh
 
       - uses: actions/download-artifact@v4
         with:
@@ -87,7 +87,7 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          files: assets/**/*.tar.gz assets/**/*.sh
+          files: assets/**
           generate_release_notes: true
           body: |
             ## Install

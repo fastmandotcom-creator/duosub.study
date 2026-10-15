@@ -49,7 +49,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/duosub-bridge dist/
+          cp bridge/target/${{ matrix.target }}/release/duosub-bridge dist/
           # Bundle the native dylibs beside the binary and resolve them via @loader_path so a
           # downloaded build runs with zero environment setup.
           find "$HOME/Library/Caches/sherpa-rs" -name 'libonnxruntime*.dylib' -exec cp {} dist/ \; 2>/dev/null || true

@@ -83,7 +83,7 @@ async fn run() -> Result<(), String> {
             ..cfg
         },
         bus,
-        model: std::sync::Arc::new(model),
+        model: std::sync::Arc::new(std::sync::RwLock::new(model)),
     };
 
     api::serve(state)

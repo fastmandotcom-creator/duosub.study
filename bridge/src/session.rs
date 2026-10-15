@@ -32,8 +32,10 @@ use crate::contract::{
 
 /// A resolved ASR model: its on-disk directory plus the catalog family the engine dispatches on.
 pub struct AsrModel {
-    pub dir: PathBuf,
+    dir: PathBuf,
     family: ModelFamily,
+    /// The catalog model id (e.g. "sense-voice" / "whisper-medium").
+    id: String,
 }
 
 impl AsrModel {
@@ -41,7 +43,13 @@ impl AsrModel {
     /// The download is the bridge's one slow startup path — a missing model with auto-download off
     /// is a loud startup error, never a silent no-ASR session.
     pub fn resolve(cfg: &BridgeConfig) -> Result<Self> {
-        let id_str = crate::config::model_id_for_family(&cfg.family);
+        Self::resolve_family(cfg, &cfg.family)
+    }
+
+    /// Resolves the model files for an explicit family string (the runtime model-switch path:
+    /// `POST /models/select`). Downloads when `auto_download` is on; fails loud otherwise.
+    pub fn resolve_family(cfg: &BridgeConfig, family: &str) -> Result<Self> {
+        let id_str = crate::config::model_id_for_family(family);
         let id = ModelId(id_str.to_owned());
         let catalog = builtin_catalog();
         // Resolve the family up front (Copy out of the catalog) so the catalog can move into the store.
@@ -85,7 +93,31 @@ impl AsrModel {
         Ok(Self {
             dir,
             family,
+            id: id_str.to_owned(),
         })
+    }
+
+    /// The catalog model id this instance serves (e.g. "sense-voice").
+    pub fn id_str(&self) -> &str {
+        &self.id
+    }
+
+    /// The languages this model family can actually transcribe, plus "auto".
+    /// - SenseVoice is trained on zh/en/ja/ko/yue only — anything else (e.g. Vietnamese) is
+    ///   silently misrecognized, so the UI must treat it as a closed set.
+    /// - Whisper (medium) is multilingual (~99 languages, Vietnamese included).
+    /// This is the bridge's capability contract — the extension validates a picked language
+    /// against it and fails loud instead of serving garbled text.
+    pub fn supported_languages(&self) -> &'static [&'static str] {
+        match self.family {
+            ModelFamily::SenseVoice => &["auto", "zh", "en", "ja", "ko", "yue"],
+            ModelFamily::Whisper => &[
+                "auto", "vi", "en", "zh", "ja", "ko", "yue", "es", "fr", "de", "ru",
+            ],
+            // The bridge does not serve these families yet (see build_engine), so no language
+            // beyond "auto" is guaranteed.
+            _ => &["auto"],
+        }
     }
 
     /// Builds the ASR engine for this model directory, dispatched on the catalog family.
@@ -391,15 +423,16 @@ pub fn poll_response(bus: &EventBus, since: u64) -> PollResponse {
 }
 
 /// `GET /health` body — built per request so the active session stays current.
-pub fn health(cfg: &BridgeConfig, active: Option<SessionStatus>) -> HealthResponse {
+pub fn health(model: &AsrModel, active: Option<SessionStatus>) -> HealthResponse {
     HealthResponse {
         ok: true,
         version: env!("CARGO_PKG_VERSION"),
-        family: cfg.family.clone(),
-        model_id: crate::config::model_id_for_family(&cfg.family).to_owned(),
-        // The model was resolved at startup (`AsrModel::resolve`): if we're up, the engine runs.
+        family: model.id_str().to_owned(),
+        model_id: model.id_str().to_owned(),
+        // Model files installed on disk (no download needed).
         model_ready: true,
         sources: available_sources(),
+        supported_languages: model.supported_languages().iter().map(|s| s.to_string()).collect(),
         system_audio: system_audio_authorization(),
         session: active,
     }

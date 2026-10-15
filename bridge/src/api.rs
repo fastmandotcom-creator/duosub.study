@@ -35,7 +35,7 @@ use crate::session::{
 pub struct AppState {
     pub cfg: BridgeConfig,
     pub bus: EventBus,
-    pub model: std::sync::Arc<AsrModel>,
+    pub model: std::sync::Arc<std::sync::RwLock<AsrModel>>,
 }
 
 /// The process-wide session slot. `None` = idle.
@@ -88,7 +88,8 @@ async fn health(
         let active = session_slot().lock().unwrap();
         active.as_ref().map(|s| s.status())
     };
-    let body: HealthResponse = build_health(&state.cfg, status);
+    let model = state.model.read().unwrap();
+    let body: HealthResponse = build_health(&model, status);
     json_ok(serde_json::to_value(&body).unwrap_or_default())
 }
 
@@ -116,7 +117,10 @@ async fn sessions_start(
         );
     }
 
-    match start_session(&state.cfg, &state.bus, &state.model, &body) {
+    // Hold the model read lock for the whole start so a concurrent /models/select cannot swap
+    // the engine out from under a session mid-start.
+    let model = state.model.read().unwrap();
+    match start_session(&state.cfg, &state.bus, &model, &body) {
         Ok(session) => {
             let id = session.id.clone();
             *active = Some(session);
@@ -154,6 +158,51 @@ async fn sessions_stop(
             json_ok(json!({ "stopped": true }))
         }
         None => json_error(StatusCode::CONFLICT, "no active session"),
+    }
+}
+
+#[derive(Deserialize)]
+struct ModelSelectRequest {
+    /// "auto" | "sense-voice" | "whisper-medium" (DUOSUB_FAMILY values; "auto" = sense-voice).
+    family: String,
+}
+
+/// `POST /models/select` — `{family}` → resolve (and auto-download) that family's model and make
+/// it the ACTIVE model for all subsequent sessions. This is how the UI switches between the
+/// fast 5-language SenseVoice and the multilingual (incl. Vietnamese) Whisper-medium.
+/// A live session is NOT interrupted: the switch takes effect on the next session start.
+async fn models_select(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<StartQuery>,
+    axum::Json(body): axum::Json<ModelSelectRequest>,
+) -> Response {
+    if !authorized(&headers, q.token.as_deref(), &state.cfg.token) {
+        return unauthenticated().await;
+    }
+    let family = body.family.trim().to_owned();
+    match AsrModel::resolve_family(&state.cfg, &family) {
+        Ok(new_model) => {
+            let model_id = new_model.id_str().to_owned();
+            let supported: Vec<String> = new_model.supported_languages().iter().map(|s| s.to_string()).collect();
+            // Swap under the write lock so in-flight session starts observe a coherent model.
+            let mut guard = state.model.write().unwrap();
+            *guard = new_model;
+            drop(guard);
+            eprintln!("duosub-bridge: active model switched to {model_id}");
+            json_ok(json!({
+                "selected": true,
+                "family": family,
+                "model_id": model_id,
+                "supported_languages": supported,
+            }))
+        }
+        Err(e) => {
+            json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &format!("model select failed ({family}): {e:?} — the model may not be downloadable"),
+            )
+        }
     }
 }
 
@@ -249,6 +298,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/sessions/start", post(sessions_start))
         .route("/sessions/stop", post(sessions_stop))
+        .route("/models/select", post(models_select))
         .route("/events", get(events))
         .layer(
             axum::middleware::from_fn(

@@ -108,6 +108,9 @@ pub struct HealthResponse {
     pub model_ready: bool,
     /// Audio sources actually constructed for the last/next session.
     pub sources: Vec<String>,
+    /// Languages the ACTIVE model can transcribe (incl. "auto"). The UI validates a picked
+    /// language against this closed set and fails loud when it is not achievable.
+    pub supported_languages: Vec<String>,
     /// Runtime OS authorization for system-audio capture: "granted" | "denied" | "not-required".
     /// The UI reads this to tell the user exactly which permission to grant (macOS Screen
     /// Recording), instead of waiting for a session failure.

@@ -11,7 +11,7 @@ No account. No cloud. No token. No API key. Audio never leaves your computer.
 **macOS — one command:**
 
 ```bash
-curl -fsSL https://duosub.study/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/fastmandotcom-creator/duosub.study/main/install.sh | bash
 ```
 
 That single command downloads the prebuilt bridge, registers a LaunchAgent so it starts with your
@@ -37,8 +37,8 @@ sources on its own.
 ## Useful commands
 
 ```bash
-bash <(curl -fsSL https://duosub.study/install.sh) --status      # is it running?
-bash <(curl -fsSL https://duosub.study/install.sh) --uninstall  # remove + auto-start entry
+bash <(curl -fsSL https://raw.githubusercontent.com/fastmandotcom-creator/duosub.study/main/install.sh) --status      # is it running?
+bash <(curl -fsSL https://raw.githubusercontent.com/fastmandotcom-creator/duosub.study/main/install.sh) --uninstall  # remove + auto-start entry
 ```
 
 | Where | What |

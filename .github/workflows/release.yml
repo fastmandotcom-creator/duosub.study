@@ -89,5 +89,5 @@ jobs:
 
             **macOS**
             ```bash
-            curl -fsSL https://duosub.study/install.sh | bash
+            curl -fsSL https://raw.githubusercontent.com/fastmandotcom-creator/duosub.study/main/install.sh | bash
             ```

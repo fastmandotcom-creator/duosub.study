@@ -52,7 +52,7 @@ jobs:
           # gates it behind TCC. A bare CLI binary has no bundle id, so it can never obtain the
           # Screen Recording grant — it would silently capture nothing. Therefore the release ships
           # a real .app bundle; the LaunchAgent runs the binary inside it.
-          APP=dist/pkg/DuoSub Bridge.app
+          APP="dist/pkg/DuoSub Bridge.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp bridge/target/${{ matrix.target }}/release/duosub-bridge "$APP/Contents/MacOS/"
           find "$HOME/Library/Caches/sherpa-rs" -name 'libonnxruntime*.dylib' -exec cp {} "$APP/Contents/MacOS/" \; 2>/dev/null || true

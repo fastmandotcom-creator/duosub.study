@@ -32,6 +32,8 @@ uuid = { version = "1", features = ["v7"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 wisp-screencapture = { path = "../vendor/wisp/crates/wisp-screencapture" }
+# Cheap, non-prompting probe of the TCC "Screen & System Audio Recording" grant for /health.
+core-graphics = "0.24"
 
 [target.'cfg(windows)'.dependencies]
 wisp-loopback = { path = "../vendor/wisp/crates/wisp-loopback" }

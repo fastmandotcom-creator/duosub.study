@@ -21,10 +21,10 @@ jobs:
           # The sherpa native crates need a recent SDK (apple-metal uses MTLLogState / MTLSampler-
           # ReductionMode), so the build must run on a macOS 26 image with Xcode 26+.
           - os: macos-26
-            asset: duosub-bridge-macos-arm64.tar.gz
+            asset: duosub-bridge-macos-arm64.app.zip
             target: aarch64-apple-darwin
           - os: macos-26
-            asset: duosub-bridge-macos-x64.tar.gz
+            asset: duosub-bridge-macos-x64.app.zip
             target: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v4
@@ -45,24 +45,44 @@ jobs:
           DUOSUB_AUTODOWNLOAD: '1'
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Collect (macOS)
+      - name: Collect (macOS app bundle)
         if: runner.os == 'macOS'
         run: |
-          # Stage the payload, then tar it OUT of the staging dir (never into itself).
-          mkdir -p dist/pkg
-          cp bridge/target/${{ matrix.target }}/release/duosub-bridge dist/pkg/
-          # Bundle the native dylibs beside the binary and resolve them via @loader_path so a
-          # downloaded build runs with zero environment setup.
-          find "$HOME/Library/Caches/sherpa-rs" -name 'libonnxruntime*.dylib' -exec cp {} dist/pkg/ \; 2>/dev/null || true
-          find "$HOME/Library/Caches/sherpa-rs" -name 'libsherpa-onnx-c-api.dylib' -exec cp {} dist/pkg/ \; 2>/dev/null || true
+          # macOS attributes system-audio capture (ScreenCaptureKit) to the BUNDLE identity and
+          # gates it behind TCC. A bare CLI binary has no bundle id, so it can never obtain the
+          # Screen Recording grant — it would silently capture nothing. Therefore the release ships
+          # a real .app bundle; the LaunchAgent runs the binary inside it.
+          APP=dist/pkg/duosub-bridge.app
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp bridge/target/${{ matrix.target }}/release/duosub-bridge "$APP/Contents/MacOS/"
+          find "$HOME/Library/Caches/sherpa-rs" -name 'libonnxruntime*.dylib' -exec cp {} "$APP/Contents/MacOS/" \; 2>/dev/null || true
+          find "$HOME/Library/Caches/sherpa-rs" -name 'libsherpa-onnx-c-api.dylib' -exec cp {} "$APP/Contents/MacOS/" \; 2>/dev/null || true
           # @loader_path finds the bundled dylibs; /usr/lib/swift finds the system Swift runtime.
-          install_name_tool -add_rpath @loader_path -add_rpath /usr/lib/swift dist/pkg/duosub-bridge
-          for lib in dist/pkg/libonnxruntime*.dylib dist/pkg/libsherpa-onnx-c-api.dylib; do
+          install_name_tool -add_rpath @loader_path -add_rpath /usr/lib/swift "$APP/Contents/MacOS/duosub-bridge"
+          for lib in "$APP/Contents/MacOS"/libonnxruntime*.dylib "$APP/Contents/MacOS"/libsherpa-onnx-c-api.dylib; do
             [ -e "$lib" ] || continue
             install_name_tool -id "$(basename "$lib")" "$lib" 2>/dev/null || true
           done
-          tar -czf dist/${{ matrix.asset }} -C dist/pkg .
-          ls -la dist/${{ matrix.asset }}
+          cat > "$APP/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleIdentifier</key><string>study.duosub.bridge</string>
+            <key>CFBundleName</key><string>DuoSub Bridge</string>
+            <key>CFBundleDisplayName</key><string>DuoSub Bridge</string>
+            <key>CFBundleExecutable</key><string>duosub-bridge</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>0.1.0</string>
+            <key>CFBundleVersion</key><string>0.1.0</string>
+            <key>LSUIElement</key><true/>
+            <key>NSMicrophoneUsageDescription</key><string>DuoSub Bridge transcribes audio on this Mac for on-device captions.</string>
+            <key>NSScreenCaptureUsageDescription</key><string>DuoSub Bridge captures system audio so it can create live captions on this Mac.</string>
+          </dict>
+          </plist>
+          PLIST
+          ditto -c -k --keepParent "$APP" dist/duosub-bridge-macos-${{ matrix.target == 'aarch64-apple-darwin' && 'arm64' || 'x64' }}.app.zip
+          ls -la dist/
 
       - uses: actions/upload-artifact@v4
         with:

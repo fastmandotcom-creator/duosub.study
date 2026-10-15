@@ -144,6 +144,11 @@ impl AsrModel {
     }
 }
 
+/// Did the caller explicitly ask for this source (as opposed to "whatever you can open")?
+fn explicitly_requested(requested: &[String], source: &str) -> bool {
+    requested.iter().any(|s| s == source)
+}
+
 /// Per-stream audio sources the bridge knows how to open, tagged with their source kind.
 /// Both streams share one engine (the session's shared transcriber), so mic + system get a single
 /// coherent language and rolling context — the app's dual-stream design.
@@ -153,16 +158,33 @@ fn open_streams(requested: &[String]) -> Result<Vec<(Box<dyn AudioSource>, Audio
 
     let mut streams: Vec<(Box<dyn AudioSource>, AudioSourceKind)> = Vec::new();
 
+    // An EXPLICITLY requested source must either open or fail the session. Silently degrading
+    // (system audio denied → quietly record the microphone) is what made the UI claim it was
+    // "listening" while capturing the wrong thing entirely.
     if want_mic {
         match wisp_audio::MicSource::from_default() {
             Ok(src) => streams.push((Box::new(src), AudioSourceKind::Microphone)),
-            Err(e) => eprintln!("duosub-bridge: microphone capture unavailable: {e:?}"),
+            Err(e) => {
+                eprintln!("duosub-bridge: microphone capture unavailable: {e:?}");
+                if explicitly_requested(requested, "microphone") {
+                    return Err(WispError::Audio(format!(
+                        "microphone capture failed: {e:?} — allow microphone access for this app in System Settings → Privacy & Security → Microphone"
+                    )));
+                }
+            }
         }
     }
     if want_system {
         match open_system_source() {
             Ok(src) => streams.push((Box::new(src), AudioSourceKind::System)),
-            Err(e) => eprintln!("duosub-bridge: system audio capture unavailable: {e:?}"),
+            Err(e) => {
+                eprintln!("duosub-bridge: system audio capture unavailable: {e:?}");
+                if explicitly_requested(requested, "system") {
+                    return Err(WispError::Audio(format!(
+                        "system audio capture failed: {e:?} — allow Screen Recording for this app in System Settings → Privacy & Security → Screen & System Audio Recording, then restart the bridge"
+                    )));
+                }
+            }
         }
     }
 
@@ -377,14 +399,34 @@ pub fn health(cfg: &BridgeConfig, active: Option<SessionStatus>) -> HealthRespon
         // The model was resolved at startup (`AsrModel::resolve`): if we're up, the engine runs.
         model_ready: true,
         sources: available_sources(),
+        system_audio: system_audio_authorization(),
         session: active,
     }
+}
+
+/// Runtime OS authorization for system-audio capture. On macOS the ScreenCaptureKit capture is
+/// gated by the TCC "Screen & System Audio Recording" permission, which the UI must be able to
+/// explain before a session starts (a denied permission is invisible in every other field).
+#[cfg(target_os = "macos")]
+pub fn system_audio_authorization() -> &'static str {
+    // Cheap, non-blocking, never prompts: exactly what a health poll may call.
+    if core_graphics::access::ScreenCaptureAccess::default().preflight() {
+        "granted"
+    } else {
+        "denied"
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn system_audio_authorization() -> &'static str {
+    "not-required"
 }
 
 /// Sources this host can open, by COMPILE-TIME capability. Deliberately never probes the real
 /// audio stack here: first `cpal`/`ScreenCaptureKit` use triggers OS permission prompts and can
 /// wedge for seconds, which would stall a cheap `/health` poll. Runtime open success/failure is
-/// surfaced per-session by `start_session` (a failed open degrades to the remaining streams, and
+/// surfaced per-session by `start_session` (an explicitly requested source that cannot open fails
+/// the session with an actionable error, and
 /// zero streams is a loud 503), so the health report stays prompt-free and instant.
 pub fn available_sources() -> Vec<String> {
     let mut out = vec!["microphone".to_owned()];

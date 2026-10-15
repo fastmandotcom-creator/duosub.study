@@ -13,10 +13,12 @@
 set -euo pipefail
 
 REPO="fastmandotcom-creator/duosub.study"
+APP_NAME="duosub-bridge.app"
 PORT="${DUOSUB_PORT:-4499}"
 HOME_DIR="$HOME/.duosub"
-BIN="$HOME_DIR/duosub-bridge"
+MODELS_DIR="$HOME_DIR/models"
 LABEL="com.duosub.bridge"
+SELF_URL="https://github.com/$REPO/releases/latest/download/install.sh"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG_DIR="$HOME/Library/Logs"
 
@@ -60,7 +62,7 @@ if [ "$os" != "Darwin" ]; then
   warn "The DuoSub Bridge currently supports macOS only (system-audio capture). $os is not supported yet."
   exit 1
 fi
-asset="duosub-bridge-macos-$rust_arch.tar.gz"
+asset="duosub-bridge-macos-$rust_arch.app.zip"
 
 # --- 2. Download ------------------------------------------------------------
 mkdir -p "$HOME_DIR"
@@ -70,18 +72,24 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 if ! curl -fL --progress-bar "$url" -o "$tmp/$asset"; then
   die "No release build for $os/$rust_arch yet ($url).
-     Build from source instead:  git clone https://github.com/$REPO && cd $REPO/bridge && cargo build --release"
+     Build from source instead:  git clone --recurse-submodules https://github.com/$REPO && cd $REPO/bridge && cargo build --release"
 fi
-tar -xzf "$tmp/$asset" -C "$tmp"
-# The tarball ships the binary plus its native dylibs (macOS).
-found="$(find "$tmp" -type f -name 'duosub-bridge' -perm -u+x | head -1)"
-[ -n "$found" ] || die "Release archive is malformed (no duosub-bridge binary)."
-cp "$found" "$BIN"
-chmod +x "$BIN"
-for lib in "$tmp"/*.dylib; do
-  [ -e "$lib" ] && cp "$lib" "$HOME_DIR/"   # sit next to the binary (@loader_path rpath)
+unzip -q "$tmp/$asset" -d "$tmp"
+
+# The bridge ships as a real .app: macOS attributes ScreenCaptureKit (system audio) to the BUNDLE
+# identity and gates it behind TCC. A bare CLI binary can never get that grant.
+APP_SRC="$tmp/$APP_NAME"
+[ -d "$APP_SRC" ] || die "Release archive is malformed (no $APP_NAME)."
+APP_DIR=""
+for dir in "/Applications" "$HOME/Applications"; do
+  if [ -d "$dir" ] && [ -w "$dir" ]; then APP_DIR="$dir"; break; fi
+  [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null && [ -w "$dir" ] && { APP_DIR="$dir"; break; }
 done
-say "Installed to $BIN"
+[ -n "$APP_DIR" ] || APP_DIR="$HOME/Applications" && mkdir -p "$APP_DIR"
+rm -rf "$APP_DIR/$APP_NAME"
+cp -R "$APP_SRC" "$APP_DIR/$APP_NAME"
+BIN="$APP_DIR/$APP_NAME/Contents/MacOS/duosub-bridge"
+say "Installed to $APP_DIR/$APP_NAME"
 
 # --- 3. Auto-start at login -------------------------------------------------
 if [ "$os" = "Darwin" ]; then
@@ -108,6 +116,9 @@ EOF
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load "$PLIST"
   say "Auto-start registered (starts at login, restarts if it stops)."
+  # Registering with Launch Services is what lets macOS attribute the app bundle identity for the
+  # Screen Recording permission prompt (a background LaunchAgent alone cannot prompt reliably).
+  open -g -a "$APP_DIR/$APP_NAME" 2>/dev/null || true
 fi
 
 # --- 4. Wait until it answers -----------------------------------------------
@@ -115,6 +126,12 @@ say "Starting the bridge (first run downloads the speech model, ~250 MB)…"
 for _ in $(seq 1 150); do
   if curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
     curl -fsS "http://127.0.0.1:$PORT/health"; echo
+    if curl -fsS "http://127.0.0.1:$PORT/health" | grep -q '"system_audio":"denied"'; then
+      warn "ONE STEP LEFT — allow system audio (this is what makes captions work):"
+      warn "  System Settings → Privacy & Security → Screen & System Audio Recording → enable \"DuoSub Bridge\""
+      warn "  then:  bash <(curl -fsSL $SELF_URL) --status   (the extension picks it up on its own)"
+      exit 0
+    fi
     say "DONE. In the LiveCode extension: Settings → Live Caption (ASR) → Caption source → \"Wisp ASR (on-device)\"."
     say "No token, no account, no cloud — audio never leaves this machine."
     exit 0

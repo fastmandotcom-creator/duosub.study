@@ -28,6 +28,12 @@ die()  { warn "$*"; exit 1; }
 
 uninstall() {
   say "Stopping and removing the DuoSub Bridge…"
+  # Legacy labels from the pre-.app era (bare CLI binary) — never run two bridges on one port.
+  for legacy in com.duosub.wisp-bridge; do
+    launchctl bootout "gui/$(id -u)/$legacy" 2>/dev/null || true
+    rm -f "$HOME/Library/LaunchAgents/$legacy.plist"
+  done
+  pkill -f "$HOME/.duosub/duosub-bridge" 2>/dev/null || true
   if [ -f "$PLIST" ]; then
     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true
     rm -f "$PLIST"
@@ -48,6 +54,7 @@ status() {
 case "${1:-}" in
   --uninstall) uninstall; exit 0 ;;
   --status)    status;    exit 0 ;;
+  --update|"") ;;
   --help|-h)   sed -n '2,14p' "$0"; exit 0 ;;
 esac
 

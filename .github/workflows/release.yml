@@ -81,6 +81,12 @@ jobs:
           </dict>
           </plist>
           PLIST
+          # macOS attributes screen-capture permission to the app's SIGNING identifier, not to the
+          # Info.plist name. An unsigned bundle reports the executable name, so every rebuild would
+          # be a brand-new app to TCC and the user's grant would be lost on upgrade. Sign ad-hoc with
+          # a stable identifier: one grant, kept forever across versions.
+          codesign --force --deep --sign - --identifier study.duosub.bridge --timestamp=none "$APP"
+          codesign -dv "$APP" 2>&1 | grep Identifier
           ditto -c -k --keepParent "$APP" dist/duosub-bridge-macos-${{ matrix.target == 'aarch64-apple-darwin' && 'arm64' || 'x64' }}.app.zip
           ls -la dist/
 

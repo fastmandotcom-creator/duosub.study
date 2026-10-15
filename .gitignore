@@ -1,0 +1,4 @@
+target/
+bridge/target/
+.DS_Store
+*.log

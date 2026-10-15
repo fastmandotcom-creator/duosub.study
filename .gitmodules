@@ -1,0 +1,3 @@
+[submodule "vendor/wisp"]
+	path = vendor/wisp
+	url = https://github.com/ppXD/Wisp.git

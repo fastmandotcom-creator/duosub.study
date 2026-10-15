@@ -1,0 +1,44 @@
+[package]
+name = "duosub-bridge"
+version = "0.1.0"
+description = "Loopback HTTP bridge for Wisp's live transcription pipeline: health, session control, SSE transcript events"
+edition = "2021"
+license = "MIT"
+
+# Standalone on purpose: this crate is intentionally NOT a Wisp workspace member (it pulls the
+# heavy native sherpa/ONNX + per-OS capture crates). Build it on a dev machine with `cargo build`
+# inside this directory. Upstream Wisp (ppXD/Wisp) does not include it; the committed source of
+# This crate is the canonical source; the extension only consumes the HTTP contract.
+# scripts/fetch-vendor-wisp.sh.
+
+[workspace]
+
+[dependencies]
+wisp-core = { path = "../vendor/wisp/crates/wisp-core" }
+wisp-pipeline = { path = "../vendor/wisp/crates/wisp-pipeline" }
+wisp-audio = { path = "../vendor/wisp/crates/wisp-audio", features = ["mic"] }
+wisp-models = { path = "../vendor/wisp/crates/wisp-models" }
+wisp-engine-sherpa = { path = "../vendor/wisp/crates/wisp-engine-sherpa" }
+
+axum = "0.7"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio-util = "0.7"
+futures-core = "0.3"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.8"
+uuid = { version = "1", features = ["v7"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wisp-screencapture = { path = "../vendor/wisp/crates/wisp-screencapture" }
+
+[target.'cfg(windows)'.dependencies]
+wisp-loopback = { path = "../vendor/wisp/crates/wisp-loopback" }
+
+[[bin]]
+name = "duosub-bridge"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "warn"

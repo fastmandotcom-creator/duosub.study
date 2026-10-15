@@ -1,0 +1,125 @@
+name: release
+
+# Tag a version (git push origin v0.1.0) to build release binaries for every platform.
+# install.sh / install.ps1 download the assets attached to the GitHub Release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            asset: duosub-bridge-macos-arm64.tar.gz
+            target: aarch64-apple-darwin
+          - os: macos-13
+            asset: duosub-bridge-macos-x64.tar.gz
+            target: x86_64-apple-darwin
+          - os: ubuntu-24.04
+            asset: duosub-bridge-linux-x64.tar.gz
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            asset: duosub-bridge-windows-x64.zip
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install native build deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake pkg-config
+
+      - name: Install native build deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential pkg-config libssl-dev
+
+      - name: Build
+        working-directory: bridge
+        env:
+          DUOSUB_AUTODOWNLOAD: '1'
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Collect (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/duosub-bridge dist/
+          # onnxruntime is fetched into the sherpa cache at build time; ship it next to the binary
+          find "$HOME/.cache/sherpa-rs" -name 'libonnxruntime.so*' -exec cp {} dist/ \; 2>/dev/null || true
+          tar -czf ../dist/${{ matrix.asset }} -C dist .
+
+      - name: Collect (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/duosub-bridge dist/
+          # Bundle the native dylibs beside the binary and resolve them via @loader_path so a
+          # downloaded build runs with zero environment setup.
+          find "$HOME/Library/Caches/sherpa-rs" -name 'libonnxruntime*.dylib' -exec cp {} dist/ \; 2>/dev/null || true
+          find "$HOME/Library/Caches/sherpa-rs" -name 'libsherpa-onnx-c-api.dylib' -exec cp {} dist/ \; 2>/dev/null || true
+          # @loader_path finds the bundled dylibs; /usr/lib/swift finds the system Swift runtime.
+          install_name_tool -add_rpath @loader_path -add_rpath /usr/lib/swift dist/duosub-bridge
+          for lib in dist/libonnxruntime*.dylib dist/libsherpa-onnx-c-api.dylib; do
+            [ -e "$lib" ] || continue
+            install_name_tool -id "$(basename "$lib")" "$lib" 2>/dev/null || true
+          done
+          tar -czf ../dist/${{ matrix.asset }} -C dist .
+
+      - name: Collect (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/duosub-bridge.exe dist/
+          $onnx = Get-ChildItem "$env:USERPROFILE\.cache\sherpa-rs" -Recurse -Filter 'onnxruntime.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($onnx) { Copy-Item $onnx.FullName dist/ }
+          Compress-Archive -Path dist/* -DestinationPath ../dist/${{ matrix.asset }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*.tar.gz assets/*.zip
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            **macOS / Linux**
+            ```bash
+            curl -fsSL https://duosub.study/install.sh | bash
+            ```
+
+            **Windows (PowerShell)**
+            ```powershell
+            irm https://duosub.study/install.ps1 | iex
+            ```

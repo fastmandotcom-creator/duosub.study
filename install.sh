@@ -65,7 +65,7 @@ asset="duosub-bridge-macos-$rust_arch.tar.gz"
 # --- 2. Download ------------------------------------------------------------
 mkdir -p "$HOME_DIR"
 url="https://github.com/$REPO/releases/latest/download/$asset"
-say "Downloading $asset…"
+say "Downloading ${asset}…"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 if ! curl -fL --progress-bar "$url" -o "$tmp/$asset"; then

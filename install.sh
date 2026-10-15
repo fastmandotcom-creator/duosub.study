@@ -13,7 +13,7 @@
 set -euo pipefail
 
 REPO="fastmandotcom-creator/duosub.study"
-APP_NAME="duosub-bridge.app"
+APP_NAME="DuoSub Bridge.app"
 PORT="${DUOSUB_PORT:-4499}"
 HOME_DIR="$HOME/.duosub"
 MODELS_DIR="$HOME_DIR/models"
@@ -85,6 +85,10 @@ unzip -q "$tmp/$asset" -d "$tmp"
 
 # The bridge ships as a real .app: macOS attributes ScreenCaptureKit (system audio) to the BUNDLE
 # identity and gates it behind TCC. A bare CLI binary can never get that grant.
+# Drop the pre-rename lowercase bundle if it lingers (same signing id, but one app only).
+for stale in "/Applications/duosub-bridge.app" "$HOME/Applications/duosub-bridge.app"; do
+  [ -d "$stale" ] && rm -rf "$stale" || true
+done
 APP_SRC="$tmp/$APP_NAME"
 [ -d "$APP_SRC" ] || die "Release archive is malformed (no $APP_NAME)."
 APP_DIR=""
@@ -134,9 +138,14 @@ for _ in $(seq 1 150); do
   if curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
     curl -fsS "http://127.0.0.1:$PORT/health"; echo
     if curl -fsS "http://127.0.0.1:$PORT/health" | grep -q '"system_audio":"denied"'; then
-      warn "ONE STEP LEFT — allow system audio (this is what makes captions work):"
-      warn "  System Settings → Privacy & Security → Screen & System Audio Recording → enable \"DuoSub Bridge\""
-      warn "  then:  bash <(curl -fsSL $SELF_URL) --status   (the extension picks it up on its own)"
+      # Nudge the bridge to fire the OS permission request: macOS opens System Settings at the
+      # Screen Recording page with "DuoSub Bridge" pre-listed — the user flips ONE toggle.
+      curl -sS -X POST "http://127.0.0.1:$PORT/sessions/start" -H 'Content-Type: application/json' \
+        -d '{"language":"auto","sources":["system"]}' >/dev/null 2>&1 || true
+      curl -sS -X POST "http://127.0.0.1:$PORT/sessions/stop" >/dev/null 2>&1 || true
+      warn "ONE TOGGLE LEFT — System Settings just opened at Screen & System Audio Recording:"
+      warn "  turn ON \"DuoSub Bridge\", then re-run:  bash <(curl -fsSL $SELF_URL) --status"
+      warn "  (nothing else to find or type — the app is already listed on that page)"
       exit 0
     fi
     say "DONE. In the LiveCode extension: Settings → Live Caption (ASR) → Caption source → \"Wisp ASR (on-device)\"."

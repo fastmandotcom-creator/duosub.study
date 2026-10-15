@@ -23,7 +23,7 @@ healthy. The first run downloads the speech model (~250 MB) once.
 System audio capture is gated by macOS, and the installer tells you when it is missing:
 
 > **System Settings → Privacy & Security → Screen & System Audio Recording → enable "DuoSub Bridge"**
-> (if it is not listed, press `+` and pick `/Applications/duosub-bridge.app`)
+> (if it is not listed, press `+` and pick `/Applications/DuoSub Bridge.app`)
 
 Without it the bridge reports `system_audio: "denied"` in `/health` and refuses to start a
 transcription session rather than quietly recording something else. This is why the release ships

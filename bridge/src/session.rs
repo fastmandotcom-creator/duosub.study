@@ -180,8 +180,9 @@ fn open_streams(requested: &[String]) -> Result<Vec<(Box<dyn AudioSource>, Audio
             Err(e) => {
                 eprintln!("duosub-bridge: system audio capture unavailable: {e:?}");
                 if explicitly_requested(requested, "system") {
+                    request_system_audio_permission();
                     return Err(WispError::Audio(format!(
-                        "system audio capture failed: {e:?} — allow Screen Recording for this app in System Settings → Privacy & Security → Screen & System Audio Recording, then restart the bridge"
+                        "system audio capture failed: {e:?} — System Settings just opened: enable \"DuoSub Bridge\" under Privacy & Security → Screen & System Audio Recording. No restart needed; the next session picks the grant up"
                     )));
                 }
             }
@@ -421,6 +422,26 @@ pub fn system_audio_authorization() -> &'static str {
 pub fn system_audio_authorization() -> &'static str {
     "not-required"
 }
+
+/// Best-effort OS permission request: when system capture is denied, nudge macOS to open System
+/// Settings at the Screen Recording page with this app pre-listed, so the user only flips a toggle.
+/// Fire-and-forget by design (a background LaunchAgent cannot block on a user dialog).
+#[cfg(target_os = "macos")]
+pub fn request_system_audio_permission() {
+    let already = system_audio_authorization() == "granted";
+    if already {
+        return;
+    }
+    let granted = core_graphics::access::ScreenCaptureAccess::default().request();
+    eprintln!(
+        "duosub-bridge: Screen Recording grant flow triggered (preflight={}, prompt result={}) — the user flips the toggle in System Settings",
+        system_audio_authorization(),
+        granted
+    );
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn request_system_audio_permission() {}
 
 /// Sources this host can open, by COMPILE-TIME capability. Deliberately never probes the real
 /// audio stack here: first `cpal`/`ScreenCaptureKit` use triggers OS permission prompts and can

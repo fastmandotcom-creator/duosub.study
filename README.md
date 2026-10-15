@@ -14,9 +14,21 @@ No account. No cloud. No token. No API key. Audio never leaves your computer.
 curl -fsSL https://github.com/fastmandotcom-creator/duosub.study/releases/latest/download/install.sh | bash
 ```
 
-That single command downloads the prebuilt bridge, registers a LaunchAgent so it starts with your
-computer (and restarts if it stops), starts it now, and waits until it reports healthy. The first
-run downloads the speech model (~250 MB) once.
+That single command installs **DuoSub Bridge.app** into `/Applications`, registers a LaunchAgent so
+it starts with your computer (and restarts if it stops), starts it now, and waits until it reports
+healthy. The first run downloads the speech model (~250 MB) once.
+
+### One permission to grant (macOS)
+
+System audio capture is gated by macOS, and the installer tells you when it is missing:
+
+> **System Settings → Privacy & Security → Screen & System Audio Recording → enable "DuoSub Bridge"**
+> (if it is not listed, press `+` and pick `/Applications/duosub-bridge.app`)
+
+Without it the bridge reports `system_audio: "denied"` in `/health` and refuses to start a
+transcription session rather than quietly recording something else. This is why the release ships
+an `.app` bundle: macOS attributes screen capture to the *bundle*, so a bare CLI binary could never
+obtain the grant.
 
 > Platform support: **macOS today** — system-audio capture goes through ScreenCaptureKit. Windows
 > and Linux are on the roadmap (the engine needs a WASAPI / PulseAudio capture backend).

@@ -8,21 +8,18 @@ No account. No cloud. No token. No API key. Audio never leaves your computer.
 
 ## Install
 
-**macOS / Linux — one command:**
+**macOS — one command:**
 
 ```bash
 curl -fsSL https://duosub.study/install.sh | bash
 ```
 
-**Windows (PowerShell):**
+That single command downloads the prebuilt bridge, registers a LaunchAgent so it starts with your
+computer (and restarts if it stops), starts it now, and waits until it reports healthy. The first
+run downloads the speech model (~250 MB) once.
 
-```powershell
-irm https://duosub.study/install.ps1 | iex
-```
-
-That single command downloads the prebuilt bridge, registers it to start automatically at login
-(macOS LaunchAgent / Linux systemd user unit / Windows scheduled task), starts it, and waits until
-it reports healthy. The first run downloads the speech model (~250 MB) once.
+> Platform support: **macOS today** — system-audio capture goes through ScreenCaptureKit. Windows
+> and Linux are on the roadmap (the engine needs a WASAPI / PulseAudio capture backend).
 
 Prefer a download? Grab the latest build from
 [Releases](https://github.com/fastmandotcom-creator/duosub.study/releases) and run the binary
@@ -47,8 +44,7 @@ bash <(curl -fsSL https://duosub.study/install.sh) --uninstall  # remove + auto-
 | Where | What |
 | --- | --- |
 | `http://127.0.0.1:4499/health` | liveness + model status |
-| macOS log | `~/Library/Logs/duosub-bridge.log` |
-| Linux log | `journalctl --user -u duosub-bridge -f` |
+| log | `~/Library/Logs/duosub-bridge.log` |
 
 ## Configuration (all optional)
 

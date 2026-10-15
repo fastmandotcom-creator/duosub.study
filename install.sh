@@ -5,7 +5,7 @@
 #
 # What it does (no prompts, no account, no token):
 #   1. Downloads the prebuilt bridge for your OS/arch from GitHub Releases into ~/.duosub.
-#   2. Registers it to auto-start at login (macOS LaunchAgent / Linux systemd --user).
+#   2. Registers it to auto-start at login (macOS LaunchAgent).
 #   3. Starts it and waits until http://127.0.0.1:4499/health answers.
 #
 # Uninstall:  bash <(curl -fsSL https://duosub.study/install.sh) --uninstall
@@ -18,8 +18,6 @@ HOME_DIR="$HOME/.duosub"
 BIN="$HOME_DIR/duosub-bridge"
 LABEL="com.duosub.bridge"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-UNIT_DIR="$HOME/.config/systemd/user"
-UNIT="$UNIT_DIR/duosub-bridge.service"
 LOG_DIR="$HOME/Library/Logs"
 
 say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
@@ -31,10 +29,6 @@ uninstall() {
   if [ -f "$PLIST" ]; then
     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true
     rm -f "$PLIST"
-  fi
-  if [ -f "$UNIT" ]; then
-    systemctl --user disable --now duosub-bridge.service 2>/dev/null || true
-    rm -f "$UNIT"
   fi
   pkill -f "$BIN" 2>/dev/null || true
   say "Uninstalled. The extension falls back to Web CC automatically."
@@ -62,11 +56,11 @@ case "$arch" in
   x86_64|amd64)  rust_arch="x64" ;;
   *) die "Unsupported CPU architecture: $arch" ;;
 esac
-case "$os" in
-  Darwin) asset="duosub-bridge-macos-$rust_arch.tar.gz" ;;
-  Linux)  asset="duosub-bridge-linux-$rust_arch.tar.gz" ;;
-  *) warn "$os is not supported yet (macOS + Linux). Windows: run install.ps1 from the repo."; exit 1 ;;
-esac
+if [ "$os" != "Darwin" ]; then
+  warn "The DuoSub Bridge currently supports macOS only (system-audio capture). $os is not supported yet."
+  exit 1
+fi
+asset="duosub-bridge-macos-$rust_arch.tar.gz"
 
 # --- 2. Download ------------------------------------------------------------
 mkdir -p "$HOME_DIR"
@@ -114,24 +108,6 @@ EOF
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load "$PLIST"
   say "Auto-start registered (starts at login, restarts if it stops)."
-else
-  mkdir -p "$UNIT_DIR"
-  cat > "$UNIT" <<EOF
-[Unit]
-Description=DuoSub Bridge (on-device system audio to live captions)
-
-[Service]
-ExecStart=$BIN
-Environment=DUOSUB_PORT=$PORT
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-EOF
-  systemctl --user daemon-reload
-  systemctl --user enable --now duosub-bridge.service
-  say "Auto-start registered (systemd --user)."
 fi
 
 # --- 4. Wait until it answers -----------------------------------------------
@@ -145,4 +121,4 @@ for _ in $(seq 1 150); do
   fi
   sleep 2
 done
-die "The bridge did not answer within 5 minutes. Logs: $LOG_DIR/duosub-bridge.log (macOS) or journalctl --user -u duosub-bridge (Linux)."
+die "The bridge did not answer within 5 minutes. Check $LOG_DIR/duosub-bridge.log"

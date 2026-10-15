@@ -1,7 +1,7 @@
 name: release
 
 # Tag a version (git push origin v0.1.0) to build release binaries for every platform.
-# install.sh / install.ps1 download the assets attached to the GitHub Release.
+# install.sh downloads the assets attached to the GitHub Release.
 on:
   push:
     tags: ['v*']
@@ -18,20 +18,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macos-15/26 ship an SDK new enough for the sherpa native crates (apple-metal needs
-          # MTLLogState & friends, which older runner SDKs do not have).
-          - os: macos-15
+          # The sherpa native crates need a recent SDK (apple-metal uses MTLLogState / MTLSampler-
+          # ReductionMode), so the build must run on a macOS 26 image with Xcode 26+.
+          - os: macos-26
             asset: duosub-bridge-macos-arm64.tar.gz
             target: aarch64-apple-darwin
-          - os: macos-15
+          - os: macos-26
             asset: duosub-bridge-macos-x64.tar.gz
             target: x86_64-apple-darwin
-          - os: ubuntu-24.04
-            asset: duosub-bridge-linux-x64.tar.gz
-            target: x86_64-unknown-linux-gnu
-          - os: windows-latest
-            asset: duosub-bridge-windows-x64.zip
-            target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,30 +39,11 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install cmake pkg-config
 
-      - name: Install native build deps (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential pkg-config libssl-dev libasound2-dev libpulse-dev
-
-      - name: Set up MSVC (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
       - name: Build
         working-directory: bridge
         env:
           DUOSUB_AUTODOWNLOAD: '1'
         run: cargo build --release --locked --target ${{ matrix.target }}
-
-      - name: Collect (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          mkdir -p dist
-          cp target/${{ matrix.target }}/release/duosub-bridge dist/
-          # onnxruntime is fetched into the sherpa cache at build time; ship it next to the binary
-          find "$HOME/.cache/sherpa-rs" -name 'libonnxruntime.so*' -exec cp {} dist/ \; 2>/dev/null || true
-          tar -czf ../dist/${{ matrix.asset }} -C dist .
 
       - name: Collect (macOS)
         if: runner.os == 'macOS'
@@ -86,16 +61,6 @@ jobs:
             install_name_tool -id "$(basename "$lib")" "$lib" 2>/dev/null || true
           done
           tar -czf ../dist/${{ matrix.asset }} -C dist .
-
-      - name: Collect (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/${{ matrix.target }}/release/duosub-bridge.exe dist/
-          $onnx = Get-ChildItem "$env:USERPROFILE\.cache\sherpa-rs" -Recurse -Filter 'onnxruntime.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($onnx) { Copy-Item $onnx.FullName dist/ }
-          Compress-Archive -Path dist/* -DestinationPath ../dist/${{ matrix.asset }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -120,12 +85,7 @@ jobs:
           body: |
             ## Install
 
-            **macOS / Linux**
+            **macOS**
             ```bash
             curl -fsSL https://duosub.study/install.sh | bash
-            ```
-
-            **Windows (PowerShell)**
-            ```powershell
-            irm https://duosub.study/install.ps1 | iex
             ```

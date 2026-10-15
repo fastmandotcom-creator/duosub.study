@@ -132,7 +132,19 @@ EOF
   open -g -a "$APP_DIR/$APP_NAME" 2>/dev/null || true
 fi
 
-# --- 4. Wait until it answers -----------------------------------------------
+# --- 4. A stale bridge from a previous layout may still hold the port even after bootout ---
+# Stop any listener on our port that is NOT the freshly installed bundle binary.
+for _ in $(seq 1 6); do
+  holder="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
+  [ -n "$holder" ] || break
+  if ! ps -p "$holder" -o command= 2>/dev/null | grep -qF "$BIN"; then
+    say "Stopping a stale bridge still holding port $PORT (pid $holder)…"
+    kill "$holder" 2>/dev/null || true
+  fi
+  sleep 2
+done
+
+# --- 5. Wait until it answers -----------------------------------------------
 say "Starting the bridge (first run downloads the speech model, ~250 MB)…"
 for _ in $(seq 1 150); do
   if curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then

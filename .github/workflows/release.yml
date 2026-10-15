@@ -48,19 +48,21 @@ jobs:
       - name: Collect (macOS)
         if: runner.os == 'macOS'
         run: |
-          mkdir -p dist
-          cp bridge/target/${{ matrix.target }}/release/duosub-bridge dist/
+          # Stage the payload, then tar it OUT of the staging dir (never into itself).
+          mkdir -p dist/pkg
+          cp bridge/target/${{ matrix.target }}/release/duosub-bridge dist/pkg/
           # Bundle the native dylibs beside the binary and resolve them via @loader_path so a
           # downloaded build runs with zero environment setup.
-          find "$HOME/Library/Caches/sherpa-rs" -name 'libonnxruntime*.dylib' -exec cp {} dist/ \; 2>/dev/null || true
-          find "$HOME/Library/Caches/sherpa-rs" -name 'libsherpa-onnx-c-api.dylib' -exec cp {} dist/ \; 2>/dev/null || true
+          find "$HOME/Library/Caches/sherpa-rs" -name 'libonnxruntime*.dylib' -exec cp {} dist/pkg/ \; 2>/dev/null || true
+          find "$HOME/Library/Caches/sherpa-rs" -name 'libsherpa-onnx-c-api.dylib' -exec cp {} dist/pkg/ \; 2>/dev/null || true
           # @loader_path finds the bundled dylibs; /usr/lib/swift finds the system Swift runtime.
-          install_name_tool -add_rpath @loader_path -add_rpath /usr/lib/swift dist/duosub-bridge
-          for lib in dist/libonnxruntime*.dylib dist/libsherpa-onnx-c-api.dylib; do
+          install_name_tool -add_rpath @loader_path -add_rpath /usr/lib/swift dist/pkg/duosub-bridge
+          for lib in dist/pkg/libonnxruntime*.dylib dist/pkg/libsherpa-onnx-c-api.dylib; do
             [ -e "$lib" ] || continue
             install_name_tool -id "$(basename "$lib")" "$lib" 2>/dev/null || true
           done
-          tar -czf ../dist/${{ matrix.asset }} -C dist .
+          tar -czf dist/${{ matrix.asset }} -C dist/pkg .
+          ls -la dist/${{ matrix.asset }}
 
       - uses: actions/upload-artifact@v4
         with:

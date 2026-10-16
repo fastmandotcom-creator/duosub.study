@@ -34,13 +34,15 @@ pub const DEFAULT_FAMILY: &str = "auto";
 
 pub const FAMILY_SENSE_VOICE: &str = "sense-voice";
 pub const FAMILY_WHISPER_MEDIUM: &str = "whisper-medium";
+/// The multilingual (99-language, Vietnamese-capable) whisper — the accurate tier.
+pub const FAMILY_WHISPER_LARGE_V3: &str = "whisper-large-v3";
 
 /// Catalog model id each bridge family serves.
 pub fn model_id_for_family(family: &str) -> &str {
-    if family == FAMILY_WHISPER_MEDIUM {
-        "whisper-medium"
-    } else {
-        FAMILY_SENSE_VOICE
+    match family {
+        FAMILY_WHISPER_MEDIUM => "whisper-medium",
+        FAMILY_WHISPER_LARGE_V3 => FAMILY_WHISPER_LARGE_V3,
+        _ => FAMILY_SENSE_VOICE,
     }
 }
 
@@ -134,6 +136,7 @@ mod tests {
     #[test]
     fn family_maps_to_catalog_model_id() {
         assert_eq!(model_id_for_family(FAMILY_WHISPER_MEDIUM), "whisper-medium");
+        assert_eq!(model_id_for_family(FAMILY_WHISPER_LARGE_V3), "whisper-large-v3");
         assert_eq!(model_id_for_family(FAMILY_SENSE_VOICE), "sense-voice");
         assert_eq!(model_id_for_family("auto"), "sense-voice");
     }

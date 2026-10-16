@@ -65,6 +65,7 @@ impl AsrModel {
         let family = descriptor.family;
         let files: Vec<String> = descriptor.files.iter().map(|f| f.name.clone()).collect();
 
+
         let downloader = HttpDownloader::with_config(DownloadConfig::default())
             .map_err(|e| WispError::Model(format!("download config: {e}")))?;
         let store = FsModelStore::new(&cfg.models_dir, catalog, Box::new(downloader));
@@ -152,20 +153,18 @@ impl AsrModel {
         &self.id
     }
 
-    /// The languages this model family can actually transcribe, plus "auto".
-    /// - SenseVoice is trained on zh/en/ja/ko/yue only — anything else (e.g. Vietnamese) is
-    ///   silently misrecognized, so the UI must treat it as a closed set.
-    /// - Whisper (medium) is multilingual (~99 languages, Vietnamese included).
-    /// This is the bridge's capability contract — the extension validates a picked language
-    /// against it and fails loud instead of serving garbled text.
+    /// The languages this model can actually transcribe, plus "auto". Per-family verified set
+    /// (NOT the catalog descriptor's `languages`, which is a HIGHLIGHTED subset — whisper declares
+    /// only 4 languages though it is the 99-language multilingual model; descriptor-driven gating
+    /// would wrongly reject Vietnamese, which is live-verified to transcribe on whisper medium).
+    /// This is the bridge's capability contract — the extension validates a picked language against
+    /// it and fails loud instead of serving garbled text.
     pub fn supported_languages(&self) -> &'static [&'static str] {
         match self.family {
             ModelFamily::SenseVoice => &["auto", "zh", "en", "ja", "ko", "yue"],
             ModelFamily::Whisper => &[
                 "auto", "vi", "en", "zh", "ja", "ko", "yue", "es", "fr", "de", "ru",
             ],
-            // The bridge does not serve these families yet (see build_engine), so no language
-            // beyond "auto" is guaranteed.
             _ => &["auto"],
         }
     }

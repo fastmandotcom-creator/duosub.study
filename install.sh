@@ -124,8 +124,17 @@ if [ "$os" = "Darwin" ]; then
 </dict>
 </plist>
 EOF
-  # Robust service registration: bootout any stale job first (a half-dead job makes
-  # `launchctl bootstrap` fail with "Load failed: 5"), then bootstrap, then fall back to load.
+  # 1) Nudge TCC registration FIRST (opens System Settings at the right pane), then stop the
+  #    extra instance it starts. This MUST happen before the service is registered: killing it
+  #    afterwards would also kill the LaunchAgent's own instance and leave two bridges racing
+  #    for :4499 (the "Address already in use" crash-loop).
+  open -g -a "$APP_DIR/$APP_NAME" 2>/dev/null || true
+  sleep 1
+  pkill -f "$BIN" 2>/dev/null || true
+  sleep 1
+
+  # 2) Robust service registration: bootout any stale job first (a half-dead job makes
+  #    `launchctl bootstrap` fail with "Load failed: 5"), then bootstrap, then fall back to load.
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
   sleep 1
   if launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; then
@@ -137,13 +146,6 @@ EOF
     warn "to fix auto-start later, re-run this installer (log: $LOG_FILE)."
     nohup "$BIN" >"$LOG_FILE" 2>&1 &
   fi
-  # Registering with Launch Services is what lets macOS attribute the app bundle identity for the
-  # Screen Recording permission prompt. It also STARTS a second instance, which would keep :4499
-  # and make the LaunchAgent crash-loop ("Address already in use") — so nudge it, then stop it:
-  # the LaunchAgent below must be the single owner of the port.
-  open -g -a "$APP_DIR/$APP_NAME" 2>/dev/null || true
-  sleep 1
-  pkill -f "$APP_DIR/$APP_NAME/Contents/MacOS/duosub-bridge" 2>/dev/null || true
 fi
 
 # --- 4. A stale bridge from a previous layout may still hold the port even after bootout ---

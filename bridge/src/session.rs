@@ -224,19 +224,25 @@ fn open_streams(requested: &[String]) -> Result<Vec<(Box<dyn AudioSource>, Audio
     // An EXPLICITLY requested source must either open or fail the session. Silently degrading
     // (system audio denied → quietly record the microphone) is what made the UI claim it was
     // "listening" while capturing the wrong thing entirely.
-    if want_mic {
-        match wisp_audio::MicSource::from_default() {
-            Ok(src) => streams.push((Box::new(src), AudioSourceKind::Microphone)),
-            Err(e) => {
-                eprintln!("duosub-bridge: microphone capture unavailable: {e:?}");
-                if explicitly_requested(requested, "microphone") {
-                    return Err(WispError::Audio(format!(
-                        "microphone capture failed: {e:?} — allow microphone access for this app in System Settings → Privacy & Security → Microphone"
-                    )));
-                }
+/// An EXPLICITLY requested source must either open or fail the session. MicSource::from_default()
+/// is a synchronous cpal open: on macOS it is near-instant once TCC has a decision for
+/// Microphone (granted → the stream opens, denied → immediate error, prompt-pending → the
+/// first open triggers the dialog and returns a transient error). A stuck prompt therefore
+/// surfaces as a start failure, never a wedged handler (the P0 class this endpoint must not
+/// reintroduce).
+if want_mic {
+    match wisp_audio::MicSource::from_default() {
+        Ok(src) => streams.push((Box::new(src), AudioSourceKind::Microphone)),
+        Err(e) => {
+            eprintln!("duosub-bridge: microphone capture unavailable: {e:?}");
+            if explicitly_requested(requested, "microphone") {
+                return Err(WispError::Audio(format!(
+                    "microphone capture failed: {e:?} — allow microphone access for this app in System Settings → Privacy & Security → Microphone (or stop selecting 'microphone' as a source)"
+                )));
             }
         }
     }
+}
     if want_system {
         match open_system_source() {
             Ok(src) => streams.push((Box::new(src), AudioSourceKind::System)),

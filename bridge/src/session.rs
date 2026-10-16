@@ -36,6 +36,10 @@ pub struct AsrModel {
     family: ModelFamily,
     /// The catalog model id (e.g. "sense-voice" / "whisper-medium").
     id: String,
+    /// Exact on-disk file names declared by the catalog descriptor (e.g. "medium-tokens.txt").
+    /// Whisper ships PREFIXED names, so hardcoding "tokens.txt" fails the sherpa recognizer —
+    /// the descriptor is the single source of truth for what is on disk.
+    files: Vec<String>,
 }
 
 impl AsrModel {
@@ -52,12 +56,14 @@ impl AsrModel {
         let id_str = crate::config::model_id_for_family(family);
         let id = ModelId(id_str.to_owned());
         let catalog = builtin_catalog();
-        // Resolve the family up front (Copy out of the catalog) so the catalog can move into the store.
-        let family = catalog
+        // Resolve the family + the exact on-disk file names up front (Copy out of the catalog) so
+        // the catalog can then move into the store.
+        let descriptor = catalog
             .iter()
             .find(|d| d.id == id)
-            .ok_or_else(|| WispError::Model(format!("unknown model {id_str}")))
-            .map(|d| d.family)?;
+            .ok_or_else(|| WispError::Model(format!("unknown model {id_str}")))?;
+        let family = descriptor.family;
+        let files: Vec<String> = descriptor.files.iter().map(|f| f.name.clone()).collect();
 
         let downloader = HttpDownloader::with_config(DownloadConfig::default())
             .map_err(|e| WispError::Model(format!("download config: {e}")))?;
@@ -94,7 +100,49 @@ impl AsrModel {
             dir,
             family,
             id: id_str.to_owned(),
+            files,
         })
+    }
+
+    /// Resolve one engine file by role from the catalog's declared names, falling back to the
+    /// legacy substring scan. Fails loud with the directory listing so a missing asset is
+    /// diagnosable instead of surfacing as an opaque sherpa "tokens does not exist" abort.
+    fn engine_file(&self, role: &str) -> Result<PathBuf> {
+        let matches = |name: &str| -> bool {
+            let lower = name.to_lowercase();
+            match role {
+                "tokens" => lower.ends_with("tokens.txt"),
+                "encoder" => lower.contains("encoder"),
+                "decoder" => lower.contains("decoder"),
+                _ => lower.ends_with(".onnx"),
+            }
+        };
+        if let Some(name) = self.files.iter().find(|n| matches(n)) {
+            let path = self.dir.join(name);
+            if path.is_file() {
+                return Ok(path);
+            }
+        }
+        if let Ok(entries) = std::fs::read_dir(&self.dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if matches(&name) && entry.path().is_file() {
+                    return Ok(entry.path());
+                }
+            }
+        }
+        let present: Vec<String> = std::fs::read_dir(&self.dir)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        Err(WispError::Model(format!(
+            "model {} has no {role} file in {} (present: {present:?})",
+            self.id,
+            self.dir.display()
+        )))
     }
 
     /// The catalog model id this instance serves (e.g. "sense-voice").
@@ -124,35 +172,18 @@ impl AsrModel {
     /// Mirrors the app's per-family file discovery (encoder/decoder/model .onnx + tokens.txt).
     pub fn build_engine(&self, language: &str) -> Result<Box<dyn wisp_core::engine::AsrEngine>> {
         let dir = &self.dir;
-        let onnx = |needle: &str| -> Option<PathBuf> {
-            std::fs::read_dir(dir)
-                .ok()?
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .find(|p| {
-                    p.file_name()
-                        .map(|n| {
-                            let n = n.to_string_lossy();
-                            n.contains(needle) && n.ends_with(".onnx")
-                        })
-                        .unwrap_or(false)
-                })
-        };
 
         match self.family {
             ModelFamily::SenseVoice => {
-                let model_file = onnx("model").ok_or_else(|| {
-                    WispError::Model("sense-voice model .onnx missing in model dir".to_owned())
-                })?;
-                let tokens = dir.join("tokens.txt");
+                // SenseVoice's model file is the only .onnx that is not encoder/decoder.
+                let model_file = self.engine_file("model")?;
+                let tokens = self.engine_file("tokens")?;
                 Ok(Box::new(SenseVoiceEngine::new(&model_file, &tokens, language)?))
             }
             ModelFamily::Whisper => {
-                let encoder = onnx("encoder")
-                    .ok_or_else(|| WispError::Model("whisper model has no encoder".to_owned()))?;
-                let decoder = onnx("decoder")
-                    .ok_or_else(|| WispError::Model("whisper model has no decoder".to_owned()))?;
-                let tokens = dir.join("tokens.txt");
+                let encoder = self.engine_file("encoder")?;
+                let decoder = self.engine_file("decoder")?;
+                let tokens = self.engine_file("tokens")?;
                 // Cantonese tokens exist only in Whisper large-v3; smaller sizes fall back to zh
                 // (same policy as the app).
                 let language = if language == "yue" && !dir.to_string_lossy().contains("large-v3") {
@@ -163,10 +194,8 @@ impl AsrModel {
                 Ok(Box::new(WhisperEngine::new(&encoder, &decoder, &tokens, language)?))
             }
             ModelFamily::Paraformer => {
-                let model_file = onnx("model").ok_or_else(|| {
-                    WispError::Model("paraformer model .onnx missing in model dir".to_owned())
-                })?;
-                let tokens = dir.join("tokens.txt");
+                let model_file = self.engine_file("model")?;
+                let tokens = self.engine_file("tokens")?;
                 Ok(Box::new(ParaformerEngine::new(&model_file, &tokens)?))
             }
             other => Err(WispError::Engine(format!(

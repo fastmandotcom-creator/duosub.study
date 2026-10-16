@@ -124,9 +124,19 @@ if [ "$os" = "Darwin" ]; then
 </dict>
 </plist>
 EOF
+  # Robust service registration: bootout any stale job first (a half-dead job makes
+  # `launchctl bootstrap` fail with "Load failed: 5"), then bootstrap, then fall back to load.
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-  launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load "$PLIST"
-  say "Auto-start registered (starts at login, restarts if it stops)."
+  sleep 1
+  if launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; then
+    say "Auto-start registered via launchctl bootstrap."
+  elif launchctl load -w "$PLIST" 2>/dev/null; then
+    say "Auto-start registered via launchctl load."
+  else
+    warn "Could not register the auto-start service. Starting it directly for this session;"
+    warn "to fix auto-start later, re-run this installer (log: $LOG_FILE)."
+    nohup "$BIN" >"$LOG_FILE" 2>&1 &
+  fi
   # Registering with Launch Services is what lets macOS attribute the app bundle identity for the
   # Screen Recording permission prompt. It also STARTS a second instance, which would keep :4499
   # and make the LaunchAgent crash-loop ("Address already in use") — so nudge it, then stop it:
@@ -173,4 +183,8 @@ for _ in $(seq 1 150); do
   fi
   sleep 2
 done
-die "The bridge did not answer within 5 minutes. Check $LOG_DIR/duosub-bridge.log"
+warn "The bridge did not answer within 5 minutes. Diagnosis:"
+warn "  service: $(launchctl list | grep "$LABEL" || echo 'not loaded — run: bash <(curl -fsSL $SELF_URL)')"
+warn "  last log lines:"
+tail -n 12 "$LOG_FILE" 2>/dev/null | sed 's/^/    /' >&2
+exit 1

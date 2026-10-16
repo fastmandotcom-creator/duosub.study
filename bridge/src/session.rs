@@ -69,13 +69,15 @@ impl AsrModel {
             .map_err(|e| WispError::Model(format!("download config: {e}")))?;
         let store = FsModelStore::new(&cfg.models_dir, catalog, Box::new(downloader));
 
-        let dir = if cfg.auto_download {
+        // ensure_with_progress is idempotent: a fully-installed model returns immediately (the
+        // ~µs "ready" path), only a genuinely missing/partial install downloads.
+        let dir = if let Some(local) = store.local_path(&id) {
+            local
+        } else if cfg.auto_download {
             let started = SystemTime::now();
-            let mut last_log = 0u64;
             let path = store.ensure_with_progress(&id, &mut |downloaded, total| {
                 // Log roughly every 20% so a multi-GB fetch doesn't spam stderr.
-                if total > 0 && downloaded.saturating_sub(last_log) >= total / 5 {
-                    last_log = downloaded;
+                if total > 0 && downloaded >= total / 5 {
                     eprintln!(
                         "duosub-bridge: downloading model {id_str}: {} MiB / {} MiB",
                         downloaded / 1_048_576,

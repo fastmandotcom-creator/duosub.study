@@ -38,11 +38,20 @@ pub struct AppState {
     pub model: std::sync::Arc<std::sync::RwLock<AsrModel>>,
 }
 
-/// The process-wide session slot. `None` = idle.
-static SESSION: OnceLock<Mutex<Option<LiveSession>>> = OnceLock::new();
+/// The process-wide session slot. `session` is the running pipeline; `starting` is set while the
+/// (slow, blocking) engine build + audio open is in flight so that a concurrent start sees 409 and
+/// a concurrent health/stop can answer from state WITHOUT waiting on the busy lock.
+static SESSION: OnceLock<Mutex<SlotState>> = OnceLock::new();
 
-fn session_slot() -> &'static Mutex<Option<LiveSession>> {
-    SESSION.get_or_init(|| Mutex::new(None))
+#[derive(Default)]
+struct SlotState {
+    session: Option<LiveSession>,
+    /// A session start is in flight (engine build / audio open).
+    starting: bool,
+}
+
+fn session_slot() -> &'static Mutex<SlotState> {
+    SESSION.get_or_init(|| Mutex::new(SlotState::default()))
 }
 
 /// Token check shared by every route (Authorization header or `?token=` query fallback —
@@ -84,9 +93,12 @@ async fn health(
     if !authorized(&headers, q.token.as_deref(), &state.cfg.token) {
         return unauthenticated().await;
     }
+    // Read the slot briefly; the starting flag lets us report "session not up yet" without blocking
+    // on the in-flight engine build (which holds the model read lock, not the slot, so /health stays
+    // responsive even while a whisper session is being built).
     let status = {
-        let active = session_slot().lock().unwrap();
-        active.as_ref().map(|s| s.status())
+        let slot = session_slot().lock().unwrap();
+        slot.session.as_ref().map(|s| s.status())
     };
     let model = state.model.read().unwrap();
     let body: HealthResponse = build_health(&model, status);
@@ -109,29 +121,53 @@ async fn sessions_start(
         return unauthenticated().await;
     }
 
-    let mut active = session_slot().lock().unwrap();
-    if active.is_some() {
-        return json_error(
-            StatusCode::CONFLICT,
-            "a session is already running; stop it first (POST /sessions/stop)",
-        );
+    // Reserve the slot atomically, then release it: the engine build + audio open is slow and
+    // blocking, so it must NOT hold the slot lock (a held lock would wedge /health and /stop,
+    // which is exactly the P0 observed — a whisper start stalls every other endpoint).
+    {
+        let mut slot = session_slot().lock().unwrap();
+        if slot.session.is_some() || slot.starting {
+            return json_error(
+                StatusCode::CONFLICT,
+                "a session is already running or starting; stop it first (POST /sessions/stop)",
+            );
+        }
+        slot.starting = true;
     }
 
-    // Hold the model read lock for the whole start so a concurrent /models/select cannot swap
-    // the engine out from under a session mid-start.
-    let model = state.model.read().unwrap();
-    match start_session(&state.cfg, &state.bus, &model, &body) {
-        Ok(session) => {
+    // Run the blocking engine build + stream open on the blocking pool so it can't stall the async
+    // HTTP runtime. The model read lock is taken INSIDE the task (a std RwLock on the blocking pool
+    // is fine) — a /models/select racing the build simply means the session starts on whichever
+    // model is active at build time, which is the app's existing behavior.
+    let cfg = state.cfg.clone();
+    let bus = state.bus.clone();
+    let model = state.model.clone();
+    let request = body.clone();
+    let build = tokio::task::spawn_blocking(move || {
+        let guard = model.read().unwrap();
+        start_session(&cfg, &bus, &guard, &request)
+    });
+    let outcome = build.await;
+
+    match outcome {
+        Ok(Ok(session)) => {
             let id = session.id.clone();
-            *active = Some(session);
+            let mut slot = session_slot().lock().unwrap();
+            slot.session = Some(session);
+            slot.starting = false;
             json_created(json!({ "started": true, "sessionId": id }))
         }
-        Err(e) => {
+        Ok(Err(e)) => {
+            session_slot().lock().unwrap().starting = false;
             crate::session::publish_error(&state.bus, &format!("session start failed: {e:?}"));
             json_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 &format!("session start failed: {e:?}"),
             )
+        }
+        Err(join) => {
+            session_slot().lock().unwrap().starting = false;
+            json_error(StatusCode::SERVICE_UNAVAILABLE, &format!("session start task failed: {join:?}"))
         }
     }
 }
@@ -151,8 +187,9 @@ async fn sessions_stop(
         return unauthenticated().await;
     }
 
-    let mut active = session_slot().lock().unwrap();
-    match active.take() {
+    let mut slot = session_slot().lock().unwrap();
+    slot.starting = false; // a stop during an in-flight start clears the reservation.
+    match slot.session.take() {
         Some(mut session) => {
             stop_session(&state.bus, &mut session);
             json_ok(json!({ "stopped": true }))
@@ -181,12 +218,20 @@ async fn models_select(
         return unauthenticated().await;
     }
     let family = body.family.trim().to_owned();
-    match AsrModel::resolve_family(&state.cfg, &family) {
-        Ok(new_model) => {
+    // Resolve (and auto-download, a potentially multi-minute blocking I/O path) on the blocking
+    // pool so a 900MB fetch can't stall the async HTTP runtime — the same P0 class as a session
+    // build wedging /health. The model write-lock is taken only for the final swap, never across
+    // the download, so /health's read-lock stays responsive the whole time.
+    let cfg = state.cfg.clone();
+    let model = state.model.clone();
+    let family_task = family.clone();
+    let task = tokio::task::spawn_blocking(move || AsrModel::resolve_family(&cfg, &family_task));
+    match task.await {
+        Ok(Ok(new_model)) => {
             let model_id = new_model.id_str().to_owned();
             let supported: Vec<String> = new_model.supported_languages().iter().map(|s| s.to_string()).collect();
             // Swap under the write lock so in-flight session starts observe a coherent model.
-            let mut guard = state.model.write().unwrap();
+            let mut guard = model.write().unwrap();
             *guard = new_model;
             drop(guard);
             eprintln!("duosub-bridge: active model switched to {model_id}");
@@ -197,12 +242,16 @@ async fn models_select(
                 "supported_languages": supported,
             }))
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             json_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 &format!("model select failed ({family}): {e:?} — the model may not be downloadable"),
             )
         }
+        Err(join) => json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &format!("model select task failed: {join:?}"),
+        ),
     }
 }
 

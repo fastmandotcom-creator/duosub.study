@@ -128,20 +128,27 @@ EOF
   launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load "$PLIST"
   say "Auto-start registered (starts at login, restarts if it stops)."
   # Registering with Launch Services is what lets macOS attribute the app bundle identity for the
-  # Screen Recording permission prompt (a background LaunchAgent alone cannot prompt reliably).
+  # Screen Recording permission prompt. It also STARTS a second instance, which would keep :4499
+  # and make the LaunchAgent crash-loop ("Address already in use") — so nudge it, then stop it:
+  # the LaunchAgent below must be the single owner of the port.
   open -g -a "$APP_DIR/$APP_NAME" 2>/dev/null || true
+  sleep 1
+  pkill -f "$APP_DIR/$APP_NAME/Contents/MacOS/duosub-bridge" 2>/dev/null || true
 fi
 
 # --- 4. A stale bridge from a previous layout may still hold the port even after bootout ---
 # Stop any listener on our port that is NOT the freshly installed bundle binary.
-for _ in $(seq 1 6); do
+for _ in $(seq 1 8); do
   holder="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
   [ -n "$holder" ] || break
-  if ! ps -p "$holder" -o command= 2>/dev/null | grep -qF "$BIN"; then
-    say "Stopping a stale bridge still holding port $PORT (pid $holder)…"
-    kill "$holder" 2>/dev/null || true
+  say "Stopping a bridge still holding port $PORT (pid $holder)…"
+  kill "$holder" 2>/dev/null || true
+  sleep 1
+  # Escalate if it ignores SIGTERM (it may be a GUI-managed instance of the same app).
+  if [ -n "$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true)" ]; then
+    kill -9 "$holder" 2>/dev/null || true
   fi
-  sleep 2
+  sleep 1
 done
 
 # --- 5. Wait until it answers -----------------------------------------------

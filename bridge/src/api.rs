@@ -324,7 +324,17 @@ pub fn router(state: AppState) -> Router {
 pub async fn serve(state: AppState) -> std::io::Result<()> {
     let host = state.cfg.host.parse::<std::net::IpAddr>().unwrap_or(std::net::Ipv4Addr::new(127, 0, 0, 1).into());
     let addr = std::net::SocketAddr::from((host, state.cfg.port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+        // A busy port means TWO bridge instances (a GUI-launched copy vs the LaunchAgent, or a
+        // stale install). Say exactly what to do — a bare OSError just crash-loops the agent.
+        std::io::Error::new(
+            e.kind(),
+            format!(
+                "cannot bind {addr} ({e}). Another DuoSub Bridge instance is already holding the port. \
+                 Fix: launchctl kickstart -k gui/$(id -u)/com.duosub.bridge  (or re-run install.sh, which stops the old one)"
+            ),
+        )
+    })?;
     let auth = if state.cfg.token.is_empty() { "no auth (loopback only)" } else { "token required" };
     eprintln!(
         "duosub-bridge: listening on http://{addr} · {auth} · models under {}",

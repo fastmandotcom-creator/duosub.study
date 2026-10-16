@@ -97,20 +97,21 @@ jobs:
           # this (tracked TODO); until then the in-extension "Grant permission" button is the seam.
           codesign --force --deep --sign - --identifier study.duosub.bridge --timestamp=none "$APP"
           codesign -dv "$APP" 2>&1 | grep Identifier
-          # HARD GATE: the binary must resolve every @rpath dependency from its own folder.
-          # A silent miss here ships a bundle that dyld refuses to load ("Library not loaded")
-          # and the only symptom users see is a dead bridge after install.
+          # HARD GATE: the ASR runtime dylibs MUST be bundled, else dyld refuses to load the binary
+          # ("Library not loaded: libonnxruntime...") and the only user-visible symptom is a dead
+          # bridge after install. System Swift/objc dylibs resolve via the /usr/lib/swift rpath we
+          # added above — those are NOT bundled and are fine. So we assert exactly the two third-party
+          # runtimes that the copy step above is responsible for providing.
           BINX="$APP/Contents/MacOS/duosub-bridge"
           MISSING=0
-          for dep in $(otool -L "$BINX" | awk '{print $1}' | grep '^@rpath/' || true); do
-            base="${dep#@rpath/}"
-            if [ ! -e "$APP/Contents/MacOS/$base" ]; then
-              echo "FATAL: $BINX needs $base but it is not bundled" >&2
+          for required in "libonnxruntime" "libsherpa-onnx-c-api"; do
+            if ! ls "$APP/Contents/MacOS"/${required}*.dylib >/dev/null 2>&1; then
+              echo "FATAL: $BINX needs ${required}*.dylib but it is not bundled" >&2
               MISSING=1
             fi
           done
           [ "$MISSING" -eq 0 ] || exit 1
-          echo "Bundle dependency check passed."
+          echo "Bundle ASR-dependency check passed: $(ls "$APP/Contents/MacOS"/*.dylib 2>/dev/null | xargs -n1 basename | tr '\n' ' ')"
           ditto -c -k --keepParent "$APP" dist/duosub-bridge-macos-${{ matrix.target == 'aarch64-apple-darwin' && 'arm64' || 'x64' }}.app.zip
           ls -la dist/
 

@@ -39,11 +39,22 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install cmake pkg-config
 
+      - name: Stamp the release tag as the package version (health reports the tag, not 0.1.0)
+        if: runner.os == 'macOS'
+        run: |
+          V="${{ github.ref_name }}"
+          V="${V#v}"
+          if [ -n "$V" ] && [ "$V" != "0.1.0" ]; then
+            sed -i.bak "s/^version = \"0\.1\.0\"/version = \"$V\"/" bridge/Cargo.toml
+            rm -f bridge/Cargo.toml.bak
+            grep '^version' bridge/Cargo.toml
+          fi
+
       - name: Build
         working-directory: bridge
         env:
           DUOSUB_AUTODOWNLOAD: '1'
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Collect (macOS app bundle)
         if: runner.os == 'macOS'
@@ -81,12 +92,25 @@ jobs:
           </dict>
           </plist>
           PLIST
-          # macOS attributes screen-capture permission to the app's SIGNING identifier, not to the
-          # Info.plist name. An unsigned bundle reports the executable name, so every rebuild would
-          # be a brand-new app to TCC and the user's grant would be lost on upgrade. Sign ad-hoc with
-          # a stable identifier: one grant, kept forever across versions.
+          # Ad-hoc-signing tax: a fresh binary is a fresh cdhash, so TCC treats every release as a
+          # new app and the user re-grants Screen Recording. A Developer ID certificate removes
+          # this (tracked TODO); until then the in-extension "Grant permission" button is the seam.
           codesign --force --deep --sign - --identifier study.duosub.bridge --timestamp=none "$APP"
           codesign -dv "$APP" 2>&1 | grep Identifier
+          # HARD GATE: the binary must resolve every @rpath dependency from its own folder.
+          # A silent miss here ships a bundle that dyld refuses to load ("Library not loaded")
+          # and the only symptom users see is a dead bridge after install.
+          BINX="$APP/Contents/MacOS/duosub-bridge"
+          MISSING=0
+          for dep in $(otool -L "$BINX" | awk '{print $1}' | grep '^@rpath/' || true); do
+            base="${dep#@rpath/}"
+            if [ ! -e "$APP/Contents/MacOS/$base" ]; then
+              echo "FATAL: $BINX needs $base but it is not bundled" >&2
+              MISSING=1
+            fi
+          done
+          [ "$MISSING" -eq 0 ] || exit 1
+          echo "Bundle dependency check passed."
           ditto -c -k --keepParent "$APP" dist/duosub-bridge-macos-${{ matrix.target == 'aarch64-apple-darwin' && 'arm64' || 'x64' }}.app.zip
           ls -la dist/
 

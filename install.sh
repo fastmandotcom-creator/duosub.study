@@ -21,6 +21,10 @@ LABEL="com.duosub.bridge"
 SELF_URL="https://github.com/$REPO/releases/latest/download/install.sh"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG_DIR="$HOME/Library/Logs"
+LOG_FILE="$LOG_DIR/duosub-bridge.log"
+# The standard install location (overwritten per-run below when the install dir differs).
+# uninstall/--status run BEFORE that point, so they rely on this default.
+BIN="/Applications/$APP_NAME/Contents/MacOS/duosub-bridge"
 
 say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
@@ -39,7 +43,7 @@ uninstall() {
     rm -f "$PLIST"
   fi
   pkill -f "$BIN" 2>/dev/null || true
-  say "Uninstalled. The extension falls back to Web CC automatically."
+  say "Uninstalled. In the extension, Live Caption will offer you to switch back to Web CC (no source is ever swapped silently)."
 }
 
 status() {

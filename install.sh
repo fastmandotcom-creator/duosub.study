@@ -73,28 +73,36 @@ if [ "$os" != "Darwin" ]; then
   warn "The DuoSub Bridge currently supports macOS only (system-audio capture). $os is not supported yet."
   exit 1
 fi
-asset="duosub-bridge-macos-$rust_arch.app.zip"
+# The .dmg is the single user-facing artifact (the same file a double-click user drags from).
+# install.sh attaches it with hdiutil and copies the .app out — same provenance, no fork.
+asset="DuoSub-Bridge-${rust_arch}.dmg"
 
-# --- 2. Download ------------------------------------------------------------
+# --- 2. Download + extract (dmg is the source of truth) ---------------------
 mkdir -p "$HOME_DIR"
 url="https://github.com/$REPO/releases/latest/download/$asset"
 say "Downloading ${asset}…"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+attach_point="$(mktemp -d)"
+cleanup() {
+  # Detach the volume (ignore errors — it may already be detached) and drop the temp dirs.
+  hdiutil detach "$attach_point" -quiet 2>/dev/null || true
+  rm -rf "$tmp" "$attach_point"
+}
+trap cleanup EXIT
 if ! curl -fL --progress-bar "$url" -o "$tmp/$asset"; then
   die "No release build for $os/$rust_arch yet ($url).
      Build from source instead:  git clone --recurse-submodules https://github.com/$REPO && cd $REPO/bridge && cargo build --release"
 fi
-unzip -q "$tmp/$asset" -d "$tmp"
-
+# Attach read-only. -nobrowse skips the /Volumes/<name> mount point (temp dir is fine).
+hdiutil attach -readonly -nobrowse -mountpoint "$attach_point" "$tmp/$asset" >/dev/null
 # The bridge ships as a real .app: macOS attributes ScreenCaptureKit (system audio) to the BUNDLE
 # identity and gates it behind TCC. A bare CLI binary can never get that grant.
 # Drop the pre-rename lowercase bundle if it lingers (same signing id, but one app only).
 for stale in "/Applications/duosub-bridge.app" "$HOME/Applications/duosub-bridge.app"; do
   [ -d "$stale" ] && rm -rf "$stale" || true
 done
-APP_SRC="$tmp/$APP_NAME"
-[ -d "$APP_SRC" ] || die "Release archive is malformed (no $APP_NAME)."
+APP_SRC="$attach_point/$APP_NAME"
+[ -d "$APP_SRC" ] || die "Release dmg is malformed (no $APP_NAME inside the volume)."
 APP_DIR=""
 for dir in "/Applications" "$HOME/Applications"; do
   if [ -d "$dir" ] && [ -w "$dir" ]; then APP_DIR="$dir"; break; fi
@@ -105,6 +113,11 @@ rm -rf "$APP_DIR/$APP_NAME"
 cp -R "$APP_SRC" "$APP_DIR/$APP_NAME"
 BIN="$APP_DIR/$APP_NAME/Contents/MacOS/duosub-bridge"
 say "Installed to $APP_DIR/$APP_NAME"
+# A release signed ad-hoc is a new app on every update. Refuse it so users are not
+# asked for Screen Recording again after each GitHub release.
+if codesign -dv "$APP_DIR/$APP_NAME" 2>&1 | grep -q "Signature=adhoc"; then
+  die "This build is ad-hoc signed. macOS will forget Screen Recording on the next update. Install a release signed with the stable DuoSub identity."
+fi
 
 # --- 3. Auto-start at login -------------------------------------------------
 if [ "$os" = "Darwin" ]; then

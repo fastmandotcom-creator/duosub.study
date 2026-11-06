@@ -4,6 +4,7 @@
 //! pipeline is forwarded into the [`EventBus`] as the bridge's own wire contract — `wisp_core`
 //! types never cross the HTTP boundary.
 
+use base64::Engine as _;
 use std::path::PathBuf;
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -26,8 +27,8 @@ use wisp_pipeline::{
 use crate::bus::EventBus;
 use crate::config::BridgeConfig;
 use crate::contract::{
-    BridgeEvent, EventBody, HealthResponse, PollResponse, SessionStatus, SessionMeta, StartRequest,
-    segment_payload,
+    BridgeEvent, EventBody, HealthResponse, PollResponse, PcmFramePayload, SessionStatus,
+    SessionMeta, StartRequest, segment_payload,
 };
 
 /// A resolved ASR model: its on-disk directory plus the catalog family the engine dispatches on.
@@ -192,7 +193,17 @@ impl AsrModel {
                 } else {
                     language
                 };
-                Ok(Box::new(WhisperEngine::new(&encoder, &decoder, &tokens, language)?))
+                // "auto" is OUR vocabulary, not Whisper's. Whisper/sherpa spell auto-detect as the
+                // EMPTY string; handing it the literal "auto" makes it an unknown language token,
+                // so detection collapses to a wrong language — measured on Vietnamese audio it
+                // emitted Chinese/Korean gibberish ("ho nine 종da学u and.") where a pinned "vi"
+                // produced the correct sentence. Translate our token at the boundary.
+                Ok(Box::new(WhisperEngine::new(
+                    &encoder,
+                    &decoder,
+                    &tokens,
+                    whisper_language_token(language),
+                )?))
             }
             ModelFamily::Paraformer => {
                 let model_file = self.engine_file("model")?;
@@ -223,40 +234,51 @@ fn open_streams(requested: &[String]) -> Result<Vec<(Box<dyn AudioSource>, Audio
     // An EXPLICITLY requested source must either open or fail the session. Silently degrading
     // (system audio denied → quietly record the microphone) is what made the UI claim it was
     // "listening" while capturing the wrong thing entirely.
-/// An EXPLICITLY requested source must either open or fail the session. MicSource::from_default()
-/// is a synchronous cpal open: on macOS it is near-instant once TCC has a decision for
-/// Microphone (granted → the stream opens, denied → immediate error, prompt-pending → the
-/// first open triggers the dialog and returns a transient error). A stuck prompt therefore
-/// surfaces as a start failure, never a wedged handler (the P0 class this endpoint must not
-/// reintroduce).
-if want_mic {
-    match wisp_audio::MicSource::from_default() {
-        Ok(src) => streams.push((Box::new(src), AudioSourceKind::Microphone)),
-        Err(e) => {
-            eprintln!("duosub-bridge: microphone capture unavailable: {e:?}");
-            if explicitly_requested(requested, "microphone") {
-                return Err(WispError::Audio(format!(
-                    "microphone capture failed: {e:?} — allow microphone access for this app in System Settings → Privacy & Security → Microphone (or stop selecting 'microphone' as a source)"
-                )));
+    /// System audio is the PRODUCT PLEDGE of this bridge (meeting captions from system audio).
+    /// Open it FIRST, and if it was explicitly requested and fails, fail the whole session with
+    /// the permission fix immediately — do NOT let a secondary microphone error (coreaudio-rs,
+    /// default input config) mask the actionable system-audio error. Both sources can fail; the
+    /// end user always needs to be told about the one whose fix is a System Settings toggle.
+    let mut system_open_err: Option<String> = None;
+    if want_system {
+        match open_system_source() {
+            Ok(src) => {
+                SYSTEM_CAPTURE_OPEN.store(true, std::sync::atomic::Ordering::SeqCst);
+                streams.push((Box::new(src), AudioSourceKind::System));
+            }
+            Err(e) => {
+                let msg = format!("duosub-bridge: system audio capture unavailable: {e:?}");
+                eprintln!("{msg}");
+                if explicitly_requested(requested, "system") {
+                    system_open_err = Some(
+                        "system audio capture failed — turn on “DuoSub Bridge” in System Settings → \
+                         Privacy & Security → Screen & System Audio Recording, then retry. \
+                         (This toggle is a separate macOS grant from Microphone; it is the one that \
+                         actually captures meeting/system audio for captions.)".into(),
+                    );
+                }
             }
         }
     }
-}
-    if want_system {
-        match open_system_source() {
-            Ok(src) => streams.push((Box::new(src), AudioSourceKind::System)),
+    if want_mic {
+        match wisp_audio::MicSource::from_default() {
+            Ok(src) => streams.push((Box::new(src), AudioSourceKind::Microphone)),
             Err(e) => {
-                eprintln!("duosub-bridge: system audio capture unavailable: {e:?}");
-                if explicitly_requested(requested, "system") {
-                    request_system_audio_permission();
-                    return Err(WispError::Audio(format!(
-                        "system audio capture failed: {e:?} — System Settings just opened: enable \"DuoSub Bridge\" under Privacy & Security → Screen & System Audio Recording. No restart needed; the next session picks the grant up"
-                    )));
+                eprintln!("duosub-bridge: microphone capture unavailable: {e:?}");
+                if explicitly_requested(requested, "microphone") && system_open_err.is_none() {
+                    system_open_err = Some(format!(
+                        "microphone capture failed: {e:?} — allow microphone access for this app \
+                         in System Settings → Privacy & Security → Microphone (or stop selecting \
+                         'microphone' as a source)"
+                    ));
                 }
             }
         }
     }
 
+    if let Some(msg) = system_open_err {
+        return Err(WispError::Audio(msg));
+    }
     if streams.is_empty() {
         return Err(WispError::Audio(
             "no audio source available (neither microphone nor system audio could open)".to_owned(),
@@ -292,6 +314,8 @@ pub struct LiveSession {
     pub language: String,
     pub segment_count: Arc<AtomicU64>,
     session: Option<Session>,
+    /// Raw-PCM capture threads (capture-only mode); joined on stop.
+    capture_handles: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl LiveSession {
@@ -391,16 +415,113 @@ pub fn start_session(
         language,
         segment_count: counter,
         session: Some(session),
+        capture_handles: Vec::new(),
     })
 }
 
-/// Stops the session, joins its pipeline threads, and publishes the `session_stopped` event.
+/// Starts a capture-only session: raw audio streams are opened and forwarded to the event bus as
+/// `PcmFrame` events (base64 PCM16 mono). No ASR engine is built — the model file is never
+/// touched — so this path stays fast and is what `cloud-live` STT consumes.
+pub fn start_capture_session(_cfg: &BridgeConfig, bus: &EventBus, req: &StartRequest) -> Result<LiveSession> {
+    let streams = open_streams(&req.sources)?;
+    let stream_names: Vec<String> = streams
+        .iter()
+        .map(|(_, kind)| match kind {
+            AudioSourceKind::Microphone => "microphone".to_owned(),
+            AudioSourceKind::System => "system".to_owned(),
+            _ => "other".to_owned(),
+        })
+        .collect();
+
+    let session_id = uuid::Uuid::now_v7().to_string();
+    let counter = Arc::new(AtomicU64::new(0));
+    let counter_sink = Arc::clone(&counter);
+    let bus_sink = bus.clone();
+    let id_sink = session_id.clone();
+
+    let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
+    for mut source in streams.into_iter().map(|(s, _)| s) {
+        let id = id_sink.clone();
+        let counter = counter_sink.clone();
+        let bus = bus_sink.clone();
+        let handle = std::thread::spawn(move || {
+            while let Ok(Some(frame)) = source.next_frame() {
+                if frame.is_empty() {
+                    continue;
+                }
+                // Convert interleaved f32 samples to mono PCM16 LE, resampled to nothing (the
+                // vendor re-resamples on its side; we ship the capture rate honestly).
+                let mono = downmix_mono(&frame.samples, frame.channels);
+                let pcm: Vec<u16> = mono
+                    .iter()
+                    .map(|s| {
+                        let clamped = s.clamp(-1.0_f32, 1.0_f32);
+                        (clamped * 32767.0_f32) as i16 as u16
+                    })
+                    .collect();
+                let bytes: Vec<u8> = pcm.iter().flat_map(|v| v.to_le_bytes()).collect();
+                counter.fetch_add(1, Ordering::Relaxed);
+                bus.publish(&BridgeEvent {
+                    seq: 0,
+                    ts: now_ms(),
+                    body: EventBody::PcmFrame(PcmFramePayload {
+                        session_id: id.clone(),
+                        audio_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                        sample_rate: frame.sample_rate,
+                        byte_count: bytes.len() as u32,
+                    }),
+                });
+            }
+        });
+        handles.push(handle);
+    }
+
+    bus.publish(&BridgeEvent {
+        seq: 0,
+        ts: now_ms(),
+        body: EventBody::SessionStarted(SessionMeta {
+            session_id: session_id.clone(),
+            language: "capture".to_owned(),
+            sources: stream_names.clone(),
+        }),
+    });
+    eprintln!(
+        "duosub-bridge: capture session {session_id} started (sources={stream_names:?})"
+    );
+
+    // The handles live on the session so `stop_session` can join them.
+    Ok(LiveSession {
+        id: session_id,
+        language: "capture".to_owned(),
+        segment_count: counter,
+        session: None,
+        capture_handles: handles,
+    })
+}
+
+/// f32 interleaved → mono: average the channels.
+fn downmix_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+    let ch = channels.max(1) as usize;
+    let frames = samples.len() / ch;
+    (0..frames)
+        .map(|i| {
+            let start = i * ch;
+            let sum: f32 = samples[start..start + ch].iter().sum();
+            sum / ch as f32
+        })
+        .collect()
+}
 pub fn stop_session(bus: &EventBus, session: &mut LiveSession) {
+    SYSTEM_CAPTURE_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
     if let Some(wisp_session) = session.session.take() {
         if let Err(e) = wisp_session.stop() {
             eprintln!("duosub-bridge: session stop reported: {e:?}");
         }
     }
+    // Join raw-PCM capture threads (capture-only mode); closing the AudioSources stops them.
+    session.capture_handles.drain(..).for_each(|h| {
+        let _ = h.join();
+    });
     bus.publish(&BridgeEvent {
         seq: 0,
         ts: now_ms(),
@@ -435,7 +556,9 @@ fn build_segmenter(cfg: &BridgeConfig, kind: AudioSourceKind) -> Box<dyn Segment
     let vad: Box<dyn Vad> = match kind {
         // The app uses a slightly louder floor for the mic than for the mixed stream.
         AudioSourceKind::Microphone => Box::new(EnergyVad::new(0.012)),
-        _ => Box::new(EnergyVad::default()),
+        // 0.01 missed real playback that was clearly audible (minutes of video, zero segments)
+        // while a loud `say` still closed. 0.004 hears normal media without treating digital silence as speech.
+        _ => Box::new(EnergyVad::new(0.004)),
     };
     Box::new(EnergySegmenter::new(vad, DEFAULT_SILENCE_HANGOVER))
 }
@@ -469,8 +592,30 @@ pub fn health(model: &AsrModel, active: Option<SessionStatus>) -> HealthResponse
         model_ready: true,
         sources: available_sources(),
         supported_languages: model.supported_languages().iter().map(|s| s.to_string()).collect(),
-        system_audio: system_audio_authorization(),
+        // A live capture outranks the preflight: it is observed fact, not a prediction.
+        system_audio: if SYSTEM_CAPTURE_OPEN.load(std::sync::atomic::Ordering::SeqCst) {
+            "granted"
+        } else {
+            system_audio_authorization()
+        },
         session: active,
+    }
+}
+
+/// Whether a system-audio capture stream is CURRENTLY open. A running capture is hard proof that
+/// the TCC grant works, which the preflight call alone cannot guarantee: measured on macOS 27 the
+/// preflight kept reporting "denied" while system audio streamed correctly into captions. Health
+/// must never tell a user their permission is missing while their captions flow.
+static SYSTEM_CAPTURE_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whisper language token for a product language code: `auto` (our vocabulary) becomes the empty
+/// string Whisper/sherpa uses for auto-detect. Everything else passes through untouched.
+#[cfg(target_os = "macos")]
+fn whisper_language_token(language: &str) -> &str {
+    if language == "auto" {
+        ""
+    } else {
+        language
     }
 }
 
@@ -492,20 +637,77 @@ pub fn system_audio_authorization() -> &'static str {
     "not-required"
 }
 
-/// Best-effort OS permission request: when system capture is denied, nudge macOS to open System
-/// Settings at the Screen Recording page with this app pre-listed, so the user only flips a toggle.
-/// Fire-and-forget by design (a background LaunchAgent cannot block on a user dialog).
+/// How long to wait before macOS may be asked for screen capture AGAIN. The prompt is a modal
+/// system dialog: asking on every failed session start (the extension retries a denied session
+/// every few seconds) spammed the user with an un-closable popup. One ask, then quiet.
+const PERMISSION_ASK_COOLDOWN_MS: u64 = 15 * 60 * 1000;
+
+/// Wall-clock ms of the last permission ask (0 = never asked in this process).
+static PERMISSION_ASKED_AT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_mono_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// The pane that holds the Screen & System Audio Recording toggle on macOS 13+.
+/// Chrome cannot open `x-apple:` (`tabs.create` fails silently) — only `open` from this process can.
+pub const CAPTURE_SETTINGS_URL: &str =
+    "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture";
+
+/// Opens System Settings on the capture-permission toggle. Not throttled: a button click is the
+/// user asking, and swallowing that ask is how the previous UI looked broken.
+#[cfg(target_os = "macos")]
+pub fn open_capture_settings() -> bool {
+    let ok = std::process::Command::new("open")
+        .arg(CAPTURE_SETTINGS_URL)
+        .status()
+        .is_ok_and(|status| status.success());
+    eprintln!(
+        "duosub-bridge: open Screen Recording settings ({}) — turn on \"DuoSub Bridge\"",
+        if ok { "opened" } else { "FAILED" }
+    );
+    ok
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn open_capture_settings() -> bool {
+    false
+}
+
+/// Explicit permission ask. Not called from session start — that popped System Settings on every
+/// failed capture and the end user turns the toggle on themselves. Kept for a future button that
+/// the user presses on purpose.
 #[cfg(target_os = "macos")]
 pub fn request_system_audio_permission() {
+    use std::sync::atomic::Ordering;
+
     let already = system_audio_authorization() == "granted";
     if already {
         return;
     }
+
+    let now = now_mono_ms();
+    let last = PERMISSION_ASKED_AT_MS.load(Ordering::SeqCst);
+    if last != 0 && now.saturating_sub(last) < PERMISSION_ASK_COOLDOWN_MS {
+        eprintln!(
+            "duosub-bridge: system audio still denied; not re-prompting (asked {}s ago, cooldown {}s)",
+            now.saturating_sub(last) / 1000,
+            PERMISSION_ASK_COOLDOWN_MS / 1000
+        );
+        return;
+    }
+    PERMISSION_ASKED_AT_MS.store(now, Ordering::SeqCst);
+
     let granted = core_graphics::access::ScreenCaptureAccess::default().request();
+    // CGRequestScreenCaptureAccess returns false and shows NOTHING once the user has declined.
+    // Open the pane ourselves so the toggle is in front of them.
+    open_capture_settings();
     eprintln!(
-        "duosub-bridge: Screen Recording grant flow triggered (preflight={}, prompt result={}) — the user flips the toggle in System Settings",
-        system_audio_authorization(),
-        granted
+        "duosub-bridge: Screen Recording grant flow triggered (prompt result={granted}) — enable \"DuoSub Bridge\" in the Settings window (asked at most once per {}s)",
+        PERMISSION_ASK_COOLDOWN_MS / 1000
     );
 }
 
@@ -523,4 +725,29 @@ pub fn available_sources() -> Vec<String> {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     out.push("system".to_owned());
     out
+}
+
+#[cfg(test)]
+mod auto_language_tests {
+    use super::*;
+
+    #[test]
+    fn capture_settings_url_lands_on_the_screen_recording_pane() {
+        assert!(CAPTURE_SETTINGS_URL.starts_with("x-apple.systempreferences:"));
+        assert!(CAPTURE_SETTINGS_URL.contains("Privacy_ScreenCapture"));
+    }
+
+    /// Whisper spells auto-detect as the EMPTY string. "auto" is our own vocabulary token and is
+    /// meaningless to Whisper — passing it through silently degrades Vietnamese audio to
+    /// Chinese/Korean gibberish, so the boundary MUST translate it.
+    #[test]
+    fn whisper_auto_maps_to_empty_language_token() {
+        assert_eq!(whisper_language_token("auto"), "");
+    }
+
+    #[test]
+    fn whisper_pinned_language_passes_through() {
+        assert_eq!(whisper_language_token("vi"), "vi");
+        assert_eq!(whisper_language_token("zh"), "zh");
+    }
 }

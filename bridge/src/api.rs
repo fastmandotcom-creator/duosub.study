@@ -26,7 +26,7 @@ use crate::bus::EventBus;
 use crate::config::BridgeConfig;
 use crate::contract::{BridgeEvent, HealthResponse, PollResponse, StartRequest};
 use crate::session::{
-    AsrModel, LiveSession, health as build_health, poll_response, start_session, stop_session,
+    AsrModel, LiveSession, health as build_health, poll_response, open_capture_settings, start_session, stop_session,
 };
 
 /// Shared server state. The bridge serves exactly one live session at a time (documented
@@ -52,6 +52,104 @@ struct SlotState {
 
 fn session_slot() -> &'static Mutex<SlotState> {
     SESSION.get_or_init(|| Mutex::new(SlotState::default()))
+}
+
+// ---------------------------------------------------------------------------
+// Orphan reaper - a session with nobody listening must not keep the machine busy
+// ---------------------------------------------------------------------------
+//
+// The bridge holds ONE session slot and, while it is held, it keeps capturing system
+// audio + the microphone and runs the ASR engine on every utterance. If the client
+// disappears (browser closed, tab crashed, the lid slept), nothing called
+// `/sessions/stop` and the session ran on forever: measured 6.7 CPU cores + 7.2 GB RSS
+// while health reported an idle session - exactly the "may rat lag" report.
+//
+// The extension stops the session when its Live Caption viewer closes, but a
+// bridge-side backstop is the only thing that covers a client that vanishes without a
+// graceful shutdown. Rule: a session with NO live SSE subscriber AND no `/events`
+// request for the whole window is an orphan - stop it and release the engine. A live
+// subscriber (a meeting in progress) is never reaped, however long the silence.
+
+/// Live `/events` SSE connections. Held by a guard dropped with the response body.
+static SSE_SUBSCRIBERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// Wall-clock ms of the most recent `/events` request (SSE connect or poll), 0 = never.
+static LAST_EVENTS_REQUEST_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// Default orphan window: generous enough to ride out an SSE blip or a sleeping lid
+/// (the extension reconnects within seconds), short enough that an abandoned session
+/// stops burning cores almost immediately.
+const DEFAULT_IDLE_REAP_MS: i64 = 180_000;
+const IDLE_REAP_ENV: &str = "DUOSUB_SESSION_IDLE_REAP_MS";
+
+fn idle_reap_window_ms() -> i64 {
+    std::env::var(IDLE_REAP_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .filter(|ms| *ms > 0)
+        .unwrap_or(DEFAULT_IDLE_REAP_MS)
+}
+
+fn now_ms_i64() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Drops the live-subscriber count with the SSE response body, so a client that dies
+/// mid-stream is accounted for without waiting for a timeout.
+struct SseSubscriberGuard;
+
+impl Drop for SseSubscriberGuard {
+    fn drop(&mut self) {
+        SSE_SUBSCRIBERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Reap an orphaned session: no SSE subscriber and no `/events` traffic for the whole
+/// window. Returns the reaped session id when it acted.
+fn reap_orphaned_session(bus: &EventBus) -> Option<String> {
+    use std::sync::atomic::Ordering;
+
+    let window = idle_reap_window_ms();
+    let subscribers = SSE_SUBSCRIBERS.load(Ordering::SeqCst);
+    if subscribers > 0 {
+        return None;
+    }
+    let last_seen = LAST_EVENTS_REQUEST_MS.load(Ordering::SeqCst);
+    let now = now_ms_i64();
+    // Guard with `saturating_sub` so a clock that reads as "never" simply compares as very old;
+    // `spawn_idle_reaper` seeds the baseline so a fresh process always serves the full window
+    // before its first reap (no false kill while a client is still mid-subscribe).
+    if now.saturating_sub(last_seen) < window {
+        return None;
+    }
+
+    let mut slot = session_slot().lock().ok()?;
+    let id = slot.session.as_ref()?.id.clone();
+    stop_session(bus, slot.session.as_mut()?);
+    eprintln!(
+        "duosub-bridge: session {id} reaped - no live caption viewer for {}s (nobody listening; \
+         capture + ASR engine released)",
+        window / 1000
+    );
+    Some(id)
+}
+
+/// Spawns the periodic orphan check. Cheap: atomic reads per tick unless a session runs.
+fn spawn_idle_reaper(state: &AppState) {
+    let bus = state.bus.clone();
+    // Seed the liveness baseline: a freshly booted bridge serves the whole window before its
+    // first reap decision, so a client that starts a session and subscribes a beat later is
+    // never killed as a false orphan.
+    LAST_EVENTS_REQUEST_MS.store(now_ms_i64(), std::sync::atomic::Ordering::SeqCst);
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(15));
+        loop {
+            tick.tick().await;
+            reap_orphaned_session(&bus);
+        }
+    });
 }
 
 /// Token check shared by every route (Authorization header or `?token=` query fallback —
@@ -121,6 +219,12 @@ async fn sessions_start(
         return unauthenticated().await;
     }
 
+    // A session start IS proof that a client is present: reset the orphan window so a freshly
+    // started session always gets its full grace period before the reaper can judge it. Without
+    // this, a long-lived bridge could reap a session in the sliver between `/sessions/start`
+    // returning and the client's `/events` subscribe landing.
+    LAST_EVENTS_REQUEST_MS.store(now_ms_i64(), std::sync::atomic::Ordering::SeqCst);
+
     // Reserve the slot atomically, then release it: the engine build + audio open is slow and
     // blocking, so it must NOT hold the slot lock (a held lock would wedge /health and /stop,
     // which is exactly the P0 observed — a whisper start stalls every other endpoint).
@@ -144,6 +248,11 @@ async fn sessions_start(
     let model = state.model.clone();
     let request = body.clone();
     let build = tokio::task::spawn_blocking(move || {
+        if request.mode == "capture" {
+            // Raw PCM forwarding: no ASR engine, no model file read (the model lock is never
+            // taken — a capture session must start even while a model download is in flight).
+            return crate::session::start_capture_session(&cfg, &bus, &request);
+        }
         let guard = model.read().unwrap();
         start_session(&cfg, &bus, &guard, &request)
     });
@@ -187,12 +296,24 @@ async fn sessions_stop(
         return unauthenticated().await;
     }
 
-    let mut slot = session_slot().lock().unwrap();
-    slot.starting = false; // a stop during an in-flight start clears the reservation.
-    match slot.session.take() {
+    // Take the session out of the slot under the lock, then stop it on the blocking pool OUTSIDE
+    // the lock: a stuck SCK pipeline join (e.g. the monitor slept mid-session) must not hold the
+    // slot lock — a held lock would wedge /health and /sessions/start (the P0 observed).
+    let taken = {
+        let mut slot = session_slot().lock().unwrap();
+        slot.starting = false; // a stop during an in-flight start clears the reservation.
+        slot.session.take()
+    };
+    match taken {
         Some(mut session) => {
-            stop_session(&state.bus, &mut session);
-            json_ok(json!({ "stopped": true }))
+            let bus = state.bus.clone();
+            let join = tokio::task::spawn_blocking(move || stop_session(&bus, &mut session)).await;
+            match join {
+                Ok(()) => json_ok(json!({ "stopped": true })),
+                Err(e) => {
+                    json_error(StatusCode::SERVICE_UNAVAILABLE, &format!("session stop task failed: {e:?}"))
+                }
+            }
         }
         None => json_error(StatusCode::CONFLICT, "no active session"),
     }
@@ -278,10 +399,26 @@ async fn events(
             .and_then(|v| v.trim().parse::<u64>().ok())
     });
 
+    // Any `/events` request is proof that a client is here: a poll refreshes the
+    // reaper's liveness timestamp, an SSE connection also holds a subscriber slot for
+    // as long as its body lives.
+    LAST_EVENTS_REQUEST_MS.store(now_ms_i64(), std::sync::atomic::Ordering::SeqCst);
+
     if wants_sse {
         let bus = state.bus.clone();
         let since = since.unwrap_or(0);
-        axum::response::sse::Sse::new(event_stream(bus, since))
+        SSE_SUBSCRIBERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let guard = SseSubscriberGuard;
+        // The guard is moved INTO the stream closure, so it is dropped exactly when the
+        // response body is dropped (client disconnect / server shutdown).
+        let mut inner = Box::pin(event_stream(bus, since));
+        let stream = futures_util::stream::poll_fn(move |cx| {
+            // `_guard` is captured by the closure, so the subscriber slot is released
+            // exactly when this stream (the response body) is dropped.
+            let _guard = &guard;
+            inner.as_mut().poll_next_unpin(cx)
+        });
+        axum::response::sse::Sse::new(stream)
             .keep_alive(axum::response::sse::KeepAlive::default().interval(Duration::from_secs(15)))
             .into_response()
     } else {
@@ -330,6 +467,7 @@ fn to_sse_event(ev: &BridgeEvent) -> axum::response::sse::Event {
     let event_name = match &ev.body {
         EventBody::Segment(_) => "segment",
         EventBody::SessionStarted(_) | EventBody::SessionStopped { .. } => "session",
+        EventBody::PcmFrame(_) => "pcm_frame",
         EventBody::Error { .. } => "error",
     };
     axum::response::sse::Event::default()
@@ -342,6 +480,23 @@ fn to_sse_event(ev: &BridgeEvent) -> axum::response::sse::Event {
 // Router + server
 // ---------------------------------------------------------------------------
 
+/// `POST /permissions/open-settings` — opens the macOS pane with the capture toggle.
+/// A button in the extension calls this because Chrome cannot open `x-apple:` URLs.
+async fn permissions_open_settings(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<HealthQuery>,
+) -> Response {
+    if !authorized(&headers, q.token.as_deref(), &state.cfg.token) {
+        return unauthenticated().await;
+    }
+    if open_capture_settings() {
+        json_ok(json!({ "opened": true }))
+    } else {
+        json_error(StatusCode::SERVICE_UNAVAILABLE, "could not open System Settings")
+    }
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -349,6 +504,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions/stop", post(sessions_stop))
         .route("/models/select", post(models_select))
         .route("/events", get(events))
+        .route("/permissions/open-settings", post(permissions_open_settings))
         .layer(
             axum::middleware::from_fn(
                 |req: axum::extract::Request, next: axum::middleware::Next| async move {
@@ -384,6 +540,7 @@ pub async fn serve(state: AppState) -> std::io::Result<()> {
             ),
         )
     })?;
+    spawn_idle_reaper(&state);
     let auth = if state.cfg.token.is_empty() { "no auth (loopback only)" } else { "token required" };
     eprintln!(
         "duosub-bridge: listening on http://{addr} · {auth} · models under {}",

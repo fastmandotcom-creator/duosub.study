@@ -58,6 +58,9 @@ jobs:
 
       - name: Collect (macOS app bundle)
         if: runner.os == 'macOS'
+        env:
+          DUOSUB_SIGNING_P12: ${{ secrets.DUOSUB_SIGNING_P12 }}
+          DUOSUB_SIGNING_PASSWORD: ${{ secrets.DUOSUB_SIGNING_PASSWORD }}
         run: |
           # macOS attributes system-audio capture (ScreenCaptureKit) to the BUNDLE identity and
           # gates it behind TCC. A bare CLI binary has no bundle id, so it can never obtain the
@@ -92,11 +95,22 @@ jobs:
           </dict>
           </plist>
           PLIST
-          # Ad-hoc-signing tax: a fresh binary is a fresh cdhash, so TCC treats every release as a
-          # new app and the user re-grants Screen Recording. A Developer ID certificate removes
-          # this (tracked TODO); until then the in-extension "Grant permission" button is the seam.
-          codesign --force --deep --sign - --identifier study.duosub.bridge --timestamp=none "$APP"
-          codesign -dv "$APP" 2>&1 | grep Identifier
+          # Never ad-hoc. Ad-hoc changes cdhash every release and macOS drops Screen Recording.
+          # CI must import the SAME certificate used for every previous release.
+          if [ -z "${DUOSUB_SIGNING_P12:-}" ]; then
+            echo "FATAL: refusing to publish an ad-hoc build." >&2
+            echo "Set secret DUOSUB_SIGNING_P12 (base64 of ~/.duosub/signing/identity.p12) and DUOSUB_SIGNING_PASSWORD." >&2
+            echo "A Developer ID certificate is preferred when one exists; the requirement is a stable identity, not a new one per commit." >&2
+            exit 1
+          fi
+          echo "$DUOSUB_SIGNING_P12" | base64 -d > /tmp/duosub-signing.p12
+          security create-keychain -p "$DUOSUB_SIGNING_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$DUOSUB_SIGNING_PASSWORD" build.keychain
+          security import /tmp/duosub-signing.p12 -k build.keychain -P "$DUOSUB_SIGNING_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$DUOSUB_SIGNING_PASSWORD" build.keychain
+          DUOSUB_SIGN_IDENTITY="DuoSub Bridge Signing" bash scripts/sign-bridge.sh "$APP"
+          rm -f /tmp/duosub-signing.p12
           # HARD GATE: the ASR runtime dylibs MUST be bundled, else dyld refuses to load the binary
           # ("Library not loaded: libonnxruntime...") and the only user-visible symptom is a dead
           # bridge after install. System Swift/objc dylibs resolve via the /usr/lib/swift rpath we
@@ -112,13 +126,30 @@ jobs:
           done
           [ "$MISSING" -eq 0 ] || exit 1
           echo "Bundle ASR-dependency check passed: $(ls "$APP/Contents/MacOS"/*.dylib 2>/dev/null | xargs -n1 basename | tr '\n' ' ')"
-          ditto -c -k --keepParent "$APP" dist/duosub-bridge-macos-${{ matrix.target == 'aarch64-apple-darwin' && 'arm64' || 'x64' }}.app.zip
+
+          # Ship the .dmg as the SINGLE user-facing artifact.
+          # install.sh (downloaded from the release asset "install.sh") attaches this same .dmg
+          # with hdiutil and copies the .app out — one build, one provenance, no fork.
+          # The DMG volume = the .app + a symlink to /Applications so a double-click user can
+          # drag the app in (no shell, but that path does NOT register the LaunchAgent; the
+          # auto-start still needs install.sh once, which the release notes say plainly).
+          ARCH_SHORT=${{ matrix.target == 'aarch64-apple-darwin' && 'arm64' || 'x64' }}
+          DMG_NAME="DuoSub-Bridge-${ARCH_SHORT}.dmg"
+          STAGE="dist/pkg-staging"
+          rm -rf "$STAGE" && mkdir -p "$STAGE"
+          cp -R "$APP" "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname "DuoSub Bridge" -srcfolder "$STAGE" -ov -format UDZO "dist/$DMG_NAME"
+          rm -rf "$STAGE"
+          echo "Built DMG: dist/$DMG_NAME ($(du -h "dist/$DMG_NAME" | awk '{print $1}'))"
+
           ls -la dist/
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
+          path: |
+            dist/DuoSub-Bridge-${{ matrix.target == 'aarch64-apple-darwin' && 'arm64' || 'x64' }}.dmg
           if-no-files-found: error
 
   publish:
@@ -141,9 +172,25 @@ jobs:
           files: assets/**
           generate_release_notes: true
           body: |
-            ## Install
+            ## Install (macOS)
 
-            **macOS**
+            **Path A — One command (default, recommended):**
             ```bash
             curl -fsSL https://github.com/fastmandotcom-creator/duosub.study/releases/latest/download/install.sh | bash
             ```
+            This is the single end-user entry point: downloads the `.dmg`, attaches it with
+            `hdiutil`, copies **DuoSub Bridge.app** into /Applications, registers the LaunchAgent
+            (auto-start), nudges TCC to open the right System Settings pane, and waits for
+            `/health`. ONE command. ONE artifact.
+
+            **Path B — No shell (fallback):**
+            1. Download the `DuoSub-Bridge-<arch>.dmg` asset above (arm64 = Apple Silicon, x64 = Intel).
+            2. Open it, drag **DuoSub Bridge.app** into **Applications** (the DMG has an Applications shortcut).
+            3. **Auto-start is NOT registered by the DMG** — to enable it, run the Path A command
+               once (or manually run `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.duosub.bridge.plist`).
+            4. Grant **Screen & System Audio Recording** once (System Settings → Privacy & Security) if prompted.
+
+            Why two paths? Path A is the only one that gives auto-start + the "ONE TOGGLE LEFT"
+            permission prompt in a single shot. Path B exists for the "my Terminal is blocked by
+            MDM" case — it installs the app, but the user still needs Path A (or manual LaunchAgent
+            registration) for auto-start. The artifact is the SAME `.dmg` either way — no fork.

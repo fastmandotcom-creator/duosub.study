@@ -23,6 +23,9 @@ pub struct BridgeEvent {
 pub enum EventBody {
     /// A live ASR segment, still revising (`final=false`) or committed (`final=true`).
     Segment(SegmentPayload),
+    /// A capture-only raw PCM frame (no ASR): `audio_base64` = PCM16 LE mono at
+    /// `sample_rate`. Sent so a cloud streaming vendor can run STT remotely.
+    PcmFrame(PcmFramePayload),
     /// A session was started on the bridge.
     SessionStarted(SessionMeta),
     /// A session was stopped.
@@ -148,6 +151,25 @@ pub struct StartRequest {
     /// Mic/system streams to open. Empty = open everything available.
     #[serde(default)]
     pub sources: Vec<String>,
+    /// `capture` = raw PCM forwarding only, no ASR engine (cloud-live STT path).
+    /// Default (absent) keeps the existing ASR session behavior.
+    #[serde(default = "default_mode")]
+    pub mode: String,
+}
+
+fn default_mode() -> String {
+    "asr".to_owned()
+}
+
+/// One raw audio frame forwarded to the client in capture-only mode.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct PcmFramePayload {
+    pub session_id: String,
+    /// PCM16 little-endian mono, base64-encoded.
+    pub audio_base64: String,
+    pub sample_rate: u32,
+    /// Bytes in the frame before encoding.
+    pub byte_count: u32,
 }
 
 fn default_language() -> String {
@@ -211,5 +233,38 @@ mod tests {
         assert!(v.get("speaker").is_none(), "null speaker must be omitted");
         assert!(v.get("confidence").is_none(), "null confidence must be omitted");
         assert_eq!(v["language"], "auto");
+    }
+
+    /// Golden wire bytes for a capture-only PCM frame — the cloud-live producer parses these
+    /// exact fields; a rename fails here first.
+    #[test]
+    fn golden_pcm_frame_bytes() {
+        let event = BridgeEvent {
+            seq: 7,
+            ts: 1_734_567_890_123,
+            body: EventBody::PcmFrame(PcmFramePayload {
+                session_id: "cap-1".to_owned(),
+                audio_base64: "AQID".to_owned(),
+                sample_rate: 48000,
+                byte_count: 3,
+            }),
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains(r#""kind":"pcm_frame""#), "wire tag: {json}");
+        assert!(json.contains(r#""sample_rate":48000"#), "wire tag: {json}");
+        // A capture session must NOT leak an ASR segment's golden shape.
+        let v: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        assert_eq!(v["kind"], "pcm_frame");
+        assert!(v.get("segment_id").is_none());
+    }
+
+    #[test]
+    fn start_request_defaults_to_asr_mode() {
+        let req: StartRequest = serde_json::from_str(r#"{"language":"vi"}"#).expect("parse");
+        assert_eq!(req.mode, "asr");
+        let cap: StartRequest = serde_json::from_str(r#"{"language":"auto","mode":"capture","sources":["system"]}"#)
+            .expect("parse");
+        assert_eq!(cap.mode, "capture");
+        assert_eq!(cap.sources, vec!["system"]);
     }
 }

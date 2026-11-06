@@ -118,8 +118,14 @@ pub struct HealthResponse {
     /// The UI reads this to tell the user exactly which permission to grant (macOS Screen
     /// Recording), instead of waiting for a session failure.
     pub system_audio: &'static str,
+    /// On-device Apple Speech can run on this host (macOS 26+). Lets the UI explain an
+    /// unsupported pick up front instead of failing at session start.
+    pub apple_speech_available: bool,
     pub session: Option<SessionStatus>,
 }
+
+/// Stable warning code: the microphone could not open, so the session runs on system audio only.
+pub const WARNING_MICROPHONE_UNAVAILABLE: &str = "microphone-unavailable";
 
 /// Live session status inside the health payload.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -128,6 +134,8 @@ pub struct SessionStatus {
     pub session_id: Option<String>,
     pub language: Option<String>,
     pub segment_count: u64,
+    /// Stable warning codes for degraded-but-running sessions (e.g. `microphone-unavailable`).
+    pub warnings: Vec<String>,
 }
 
 /// `GET /events?since=<seq>` response (poll fallback). `oldest_in_ring`/`latest_seq` let a

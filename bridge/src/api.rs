@@ -262,10 +262,11 @@ async fn sessions_start(
     match outcome {
         Ok(Ok(session)) => {
             let id = session.id.clone();
+            let warnings = session.warnings.clone();
             let mut slot = session_slot().lock().unwrap();
             slot.session = Some(session);
             slot.starting = false;
-            json_created(json!({ "started": true, "sessionId": id }))
+            json_created(json!({ "started": true, "sessionId": id, "warnings": warnings }))
         }
         Ok(Err(e)) => {
             session_slot().lock().unwrap().starting = false;
@@ -499,6 +500,27 @@ async fn permissions_open_settings(
     }
 }
 
+/// `POST /permissions/open-live-captions` — opens the macOS Live Captions pane (Accessibility)
+/// so the end user can toggle it on/off and pick a language. No automation beyond opening the
+/// pane: Apple exposes no API to toggle Live Captions from a third-party app, so this endpoint
+/// is intentionally "open the pane only" and always reports `opened` (true/false), never a
+/// granted/unsupported state.
+async fn permissions_open_live_captions(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<HealthQuery>,
+) -> Response {
+    if !authorized(&headers, q.token.as_deref(), &state.cfg.token) {
+        return unauthenticated().await;
+    }
+    let opened = crate::session::open_live_caption_settings();
+    if opened {
+        json_ok(json!({ "opened": true }))
+    } else {
+        json_error(StatusCode::SERVICE_UNAVAILABLE, "could not open Live Captions settings")
+    }
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -507,6 +529,7 @@ pub fn router(state: AppState) -> Router {
         .route("/models/select", post(models_select))
         .route("/events", get(events))
         .route("/permissions/open-settings", post(permissions_open_settings))
+        .route("/permissions/open-live-captions", post(permissions_open_live_captions))
         .layer(
             axum::middleware::from_fn(
                 |req: axum::extract::Request, next: axum::middleware::Next| async move {

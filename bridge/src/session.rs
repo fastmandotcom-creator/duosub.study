@@ -28,7 +28,7 @@ use wisp_pipeline::{EnergySegmenter, EnergyVad, LiveStream, Segmenter, Session, 
 
 use crate::bus::EventBus;
 use crate::config::BridgeConfig;
-use crate::contract::{
+use crate::contract::{WARNING_MICROPHONE_UNAVAILABLE, 
     segment_payload, BridgeEvent, EventBody, HealthResponse, PcmFramePayload, PollResponse,
     SessionMeta, SessionStatus, StartRequest,
 };
@@ -288,14 +288,18 @@ fn explicitly_requested(requested: &[String], source: &str) -> bool {
     requested.iter().any(|s| s == source)
 }
 
+/// Opened audio streams plus the warning codes for sources that degraded (never silent).
+type OpenedStreams = (Vec<(Box<dyn AudioSource>, AudioSourceKind)>, Vec<String>);
+
 /// Per-stream audio sources the bridge knows how to open, tagged with their source kind.
 /// Both streams share one engine (the session's shared transcriber), so mic + system get a single
 /// coherent language and rolling context — the app's dual-stream design.
-fn open_streams(requested: &[String]) -> Result<Vec<(Box<dyn AudioSource>, AudioSourceKind)>> {
+fn open_streams(requested: &[String]) -> Result<OpenedStreams> {
     let want_mic = requested.is_empty() || requested.iter().any(|s| s == "microphone");
     let want_system = requested.is_empty() || requested.iter().any(|s| s == "system");
 
     let mut streams: Vec<(Box<dyn AudioSource>, AudioSourceKind)> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
 
     // An EXPLICITLY requested source must either open or fail the session. Silently degrading
     // (system audio denied → quietly record the microphone) is what made the UI claim it was
@@ -336,6 +340,9 @@ fn open_streams(requested: &[String]) -> Result<Vec<(Box<dyn AudioSource>, Audio
                 // above) instead of killing the meeting captions. A mic-only request, or no
                 // other open stream, still fails loudly.
                 let system_stream_open = !streams.is_empty();
+                if system_stream_open {
+                    warnings.push(WARNING_MICROPHONE_UNAVAILABLE.to_owned());
+                }
                 if explicitly_requested(requested, "microphone")
                     && system_open_err.is_none()
                     && !system_stream_open
@@ -358,7 +365,7 @@ fn open_streams(requested: &[String]) -> Result<Vec<(Box<dyn AudioSource>, Audio
             "no audio source available (neither microphone nor system audio could open)".to_owned(),
         ));
     }
-    Ok(streams)
+    Ok((streams, warnings))
 }
 
 /// System/meeting audio capture — ScreenCaptureKit on macOS, WASAPI loopback on Windows.
@@ -387,6 +394,8 @@ pub struct LiveSession {
     pub id: String,
     pub language: String,
     pub segment_count: Arc<AtomicU64>,
+    /// Stable warning codes from session start (degraded sources), surfaced via status + start reply.
+    pub warnings: Vec<String>,
     session: Option<PipelineSessions>,
     /// Raw-PCM capture threads (capture-only mode); joined on stop.
     capture_handles: Vec<std::thread::JoinHandle<()>>,
@@ -435,6 +444,7 @@ impl LiveSession {
             session_id: Some(self.id.clone()),
             language: Some(self.language.clone()),
             segment_count: self.segment_count.load(Ordering::Relaxed),
+            warnings: self.warnings.clone(),
         }
     }
 }
@@ -483,7 +493,7 @@ pub fn start_session(
         }
     }
 
-    let streams = open_streams(&req.sources)?;
+    let (streams, warnings) = open_streams(&req.sources)?;
     let stream_names: Vec<String> = streams
         .iter()
         .map(|(_, kind)| match kind {
@@ -562,6 +572,7 @@ pub fn start_session(
         id: session_id,
         language,
         segment_count: counter,
+        warnings,
         session: Some(session),
         capture_handles: Vec::new(),
     })
@@ -575,7 +586,7 @@ pub fn start_capture_session(
     bus: &EventBus,
     req: &StartRequest,
 ) -> Result<LiveSession> {
-    let streams = open_streams(&req.sources)?;
+    let (streams, warnings) = open_streams(&req.sources)?;
     let stream_names: Vec<String> = streams
         .iter()
         .map(|(_, kind)| match kind {
@@ -644,6 +655,7 @@ pub fn start_capture_session(
         id: session_id,
         language: "capture".to_owned(),
         segment_count: counter,
+        warnings,
         session: None,
         capture_handles: handles,
     })
@@ -802,8 +814,20 @@ pub fn health(model: &AsrModel, active: Option<SessionStatus>) -> HealthResponse
         } else {
             system_audio_authorization()
         },
+        apple_speech_available: apple_speech_available(),
         session: active,
     }
+}
+
+/// Apple on-device speech needs macOS 26+; every other host reports `false`.
+#[cfg(target_os = "macos")]
+fn apple_speech_available() -> bool {
+    wisp_applespeech::is_available()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apple_speech_available() -> bool {
+    false
 }
 
 /// Whether a system-audio capture stream is CURRENTLY open. A running capture is hard proof that
@@ -875,6 +899,33 @@ pub fn open_capture_settings() -> bool {
         if ok { "opened" } else { "FAILED" }
     );
     ok
+}
+
+/// The pane that holds the macOS Live Captions toggle + language picker (System Settings →
+/// Accessibility → Live Captions). Deliberately NO on/off automation: Apple exposes no API for a
+/// third-party app to toggle Live Captions, so the bridge's job is to open the pane and let the
+/// end user flip the toggle + pick the language manually.
+pub const LIVE_CAPTION_SETTINGS_URL: &str =
+    "x-apple.systempreferences:com.apple.settings.Accessibility.extension";
+
+/// Opens System Settings on the Live Captions pane. Not throttled: a button click is the user
+/// asking, same contract as `open_capture_settings`.
+#[cfg(target_os = "macos")]
+pub fn open_live_caption_settings() -> bool {
+    let ok = std::process::Command::new("open")
+        .arg(LIVE_CAPTION_SETTINGS_URL)
+        .status()
+        .is_ok_and(|status| status.success());
+    eprintln!(
+        "duosub-bridge: open Live Captions settings ({}) — end user toggles language manually",
+        if ok { "opened" } else { "FAILED" }
+    );
+    ok
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn open_live_caption_settings() -> bool {
+    false
 }
 
 #[cfg(not(target_os = "macos"))]

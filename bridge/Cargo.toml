@@ -33,6 +33,7 @@ base64 = "0.22"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 wisp-screencapture = { path = "../vendor/wisp/crates/wisp-screencapture" }
+wisp-applespeech = { path = "../vendor/wisp/crates/wisp-applespeech" }
 # Cheap, non-prompting probe of the TCC "Screen & System Audio Recording" grant for /health.
 core-graphics = "0.24"
 

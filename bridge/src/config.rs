@@ -14,7 +14,7 @@ pub const BRIDGE_PORT_ENV: &str = "DUOSUB_PORT";
 pub const BRIDGE_TOKEN_FILE_ENV: &str = "DUOSUB_TOKEN_FILE";
 /// Root directory the model store looks in for installed models. Pinned literal.
 pub const BRIDGE_MODELS_DIR_ENV: &str = "DUOSUB_MODELS_DIR";
-/// Model family to serve: "auto" | "sense-voice" | "whisper-medium". Pinned literal.
+/// Model family to serve: "auto" | "sense-voice" | Whisper tiers | "apple-speech". Pinned literal.
 pub const BRIDGE_FAMILY_ENV: &str = "DUOSUB_FAMILY";
 /// Path to a Silero VAD model (.onnx). Falls back to the energy gate when unset/absent. Pinned literal.
 pub const BRIDGE_SILERO_ENV: &str = "DUOSUB_SILERO";
@@ -36,12 +36,15 @@ pub const FAMILY_SENSE_VOICE: &str = "sense-voice";
 pub const FAMILY_WHISPER_MEDIUM: &str = "whisper-medium";
 /// The multilingual (99-language, Vietnamese-capable) whisper — the accurate tier.
 pub const FAMILY_WHISPER_LARGE_V3: &str = "whisper-large-v3";
+/// Apple's built-in streaming recognizer; macOS 26+ only and no model download.
+pub const FAMILY_APPLE_SPEECH: &str = "apple-speech";
 
 /// Catalog model id each bridge family serves.
 pub fn model_id_for_family(family: &str) -> &str {
     match family {
         FAMILY_WHISPER_MEDIUM => "whisper-medium",
         FAMILY_WHISPER_LARGE_V3 => FAMILY_WHISPER_LARGE_V3,
+        FAMILY_APPLE_SPEECH => FAMILY_APPLE_SPEECH,
         _ => FAMILY_SENSE_VOICE,
     }
 }
@@ -86,7 +89,9 @@ impl BridgeConfig {
             .ok()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or_else(|| home_dir().join(DEFAULT_MODELS_DIR));
-        let family = env::var(BRIDGE_FAMILY_ENV).ok().filter(|v| !v.trim().is_empty());
+        let family = env::var(BRIDGE_FAMILY_ENV)
+            .ok()
+            .filter(|v| !v.trim().is_empty());
         let auto_download = match env::var(BRIDGE_AUTODOWNLOAD_ENV).as_deref() {
             Err(_) => true,
             Ok(v) => !matches!(v.trim(), "0" | "false" | "no"),
@@ -136,8 +141,12 @@ mod tests {
     #[test]
     fn family_maps_to_catalog_model_id() {
         assert_eq!(model_id_for_family(FAMILY_WHISPER_MEDIUM), "whisper-medium");
-        assert_eq!(model_id_for_family(FAMILY_WHISPER_LARGE_V3), "whisper-large-v3");
+        assert_eq!(
+            model_id_for_family(FAMILY_WHISPER_LARGE_V3),
+            "whisper-large-v3"
+        );
         assert_eq!(model_id_for_family(FAMILY_SENSE_VOICE), "sense-voice");
+        assert_eq!(model_id_for_family(FAMILY_APPLE_SPEECH), "apple-speech");
         assert_eq!(model_id_for_family("auto"), "sense-voice");
     }
 }

@@ -16,7 +16,7 @@ curl -fsSL https://github.com/fastmandotcom-creator/duosub.study/releases/latest
 
 That single command installs **DuoSub Bridge.app** into `/Applications`, registers a LaunchAgent so
 it starts with your computer (and restarts if it stops), starts it now, and waits until it reports
-healthy. The first run downloads the speech model (~250 MB) once.
+healthy. The default first run downloads the SenseVoice model (~250 MB) once.
 
 ### One permission to grant (macOS)
 
@@ -24,6 +24,10 @@ System audio capture is gated by macOS, and the installer tells you when it is m
 
 > **System Settings → Privacy & Security → Screen & System Audio Recording → enable "DuoSub Bridge"**
 > (if it is not listed, press `+` and pick `/Applications/DuoSub Bridge.app`)
+
+The Live Caption permission banner's **Request access & open System Settings** button asks macOS
+for the grant from the signed bridge app, then opens this exact pane. Chrome cannot open the
+`x-apple:` System Settings URL itself.
 
 Without it the bridge reports `system_audio: "denied"` in `/health` and refuses to start a
 transcription session rather than quietly recording something else. This is why the release ships
@@ -46,6 +50,12 @@ yourself — it works from anywhere.
 Pick *Web CC* instead if you prefer the meeting's own captions. The extension never switches
 sources on its own.
 
+The ASR model picker also offers **Apple Speech (on-device)** on macOS 26 or newer. It uses Apple's
+streaming SpeechAnalyzer API, not the Live Captions accessibility tree; DuoSub downloads no model
+for this option, though macOS may install its language asset the first time. “Auto” follows the
+Mac's system locale. The currently exposed pinned languages are English, Chinese, Japanese, Korean,
+and Cantonese.
+
 ## Useful commands
 
 ```bash
@@ -64,6 +74,7 @@ bash <(curl -fsSL https://github.com/fastmandotcom-creator/duosub.study/releases
 | --- | --- | --- |
 | `DUOSUB_PORT` | `4499` | loopback port |
 | `DUOSUB_HOST` | `127.0.0.1` | bind address (loopback only — keep it that way) |
+| `DUOSUB_FAMILY` | `auto` | `auto`, `sense-voice`, Whisper tiers, or `apple-speech` (macOS 26+) |
 | `DUOSUB_LANGUAGE` | `auto` | `auto` or a language code (`en`, `vi`, `ja`, …) |
 | `DUOSUB_TOKEN` | *unset* | set it to require `Authorization: Bearer <token>` on every route |
 | `DUOSUB_MODELS_DIR` | `~/.duosub/models` | speech model cache |

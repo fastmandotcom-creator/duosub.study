@@ -34,9 +34,12 @@ fi
 
 # --- 3. Granted: synthesize speech into SYSTEM audio and expect a final segment
 say "permission granted → starting session and playing speech into system audio…"
-curl -fsS -X POST "$BASE/sessions/start" -H 'Content-Type: application/json' \
-    -d '{"language":"en","sources":["system"]}' >/dev/null \
+start_body="$(curl -fsS -X POST "$BASE/sessions/start" -H 'Content-Type: application/json' \
+    -d '{"language":"en","sources":["system"]}')" \
   || fail "session start failed while permission is granted"
+# The event ring replays earlier sessions; only accept segments from THIS session.
+session_id="$(echo "$start_body" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("sessionId",""))')"
+[ -n "$session_id" ] || fail "session start returned no sessionId: $start_body"
 
 [ -x /usr/bin/say ] && { ( /usr/bin/say -v Samantha -o /tmp/duosub-e2e.aiff "$SAMPLE_TEXT" && /usr/bin/afplay /tmp/duosub-e2e.aiff &>/dev/null & ); true; } \
   || fail "this verifier needs macOS /usr/bin/say (extend it for your platform)"
@@ -44,7 +47,18 @@ curl -fsS -X POST "$BASE/sessions/start" -H 'Content-Type: application/json' \
 deadline=$(( $(date +%s) + TIMEOUT_S ))
 seen=0
 while [ "$(date +%s)" -lt "$deadline" ]; do
-  ev="$(curl -fsSN "$BASE/events?since=0" 2>/dev/null | grep -m1 '"status":"final"' || true)"
+  ev="$(curl -fsS --max-time 5 "$BASE/events?since=0" 2>/dev/null | SESSION_ID="$session_id" python3 -c '
+import os, sys, json
+sid = os.environ["SESSION_ID"]
+try:
+    events = json.load(sys.stdin).get("events", [])
+except Exception:
+    sys.exit(0)
+for e in events:
+    if e.get("session_id") == sid and e.get("kind") == "segment" and e.get("final") is True and e.get("text"):
+        print(json.dumps(e))
+        break
+' || true)"
   if [ -n "$ev" ]; then
     txt="$(echo "$ev" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("text",""))' 2>/dev/null || true)"
     say "final segment: ${txt:0:120}"

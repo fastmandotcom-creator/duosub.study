@@ -26,7 +26,8 @@ use crate::bus::EventBus;
 use crate::config::BridgeConfig;
 use crate::contract::{BridgeEvent, HealthResponse, PollResponse, StartRequest};
 use crate::session::{
-    AsrModel, LiveSession, health as build_health, poll_response, open_capture_settings, start_session, stop_session,
+    request_system_audio_permission, AsrModel, LiveSession, health as build_health,
+    poll_response, start_session, stop_session,
 };
 
 /// Shared server state. The bridge serves exactly one live session at a time (documented
@@ -480,8 +481,8 @@ fn to_sse_event(ev: &BridgeEvent) -> axum::response::sse::Event {
 // Router + server
 // ---------------------------------------------------------------------------
 
-/// `POST /permissions/open-settings` — opens the macOS pane with the capture toggle.
-/// A button in the extension calls this because Chrome cannot open `x-apple:` URLs.
+/// `POST /permissions/open-settings` — requests the user's Screen Recording grant and opens the
+/// macOS pane. Chrome cannot open `x-apple:` URLs directly, so the extension routes its button here.
 async fn permissions_open_settings(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -490,8 +491,9 @@ async fn permissions_open_settings(
     if !authorized(&headers, q.token.as_deref(), &state.cfg.token) {
         return unauthenticated().await;
     }
-    if open_capture_settings() {
-        json_ok(json!({ "opened": true }))
+    let (granted, opened) = request_system_audio_permission();
+    if opened {
+        json_ok(json!({ "opened": true, "granted": granted }))
     } else {
         json_error(StatusCode::SERVICE_UNAVAILABLE, "could not open System Settings")
     }

@@ -28,9 +28,9 @@ pub fn platform_info() -> PlatformInfo {
     match std::env::consts::OS {
         "macos" => info("macos", "ScreenCaptureKit", true),
         "windows" => info("windows", "WASAPI loopback", true),
-        // A Linux PulseAudio/PipeWire backend is the next port; the microphone path already works
-        // through the cross-platform `cpal` source in wisp-audio.
-        "linux" => info("linux", "unavailable (PulseAudio port pending)", false),
+        // PipeWire is reached through its PulseAudio compatibility server; the monitor input
+        // is captured by the local `wisp-pulseloopback` crate.
+        "linux" => info("linux", "PulseAudio/PipeWire monitor", true),
         _ => info("unknown", "unavailable", false),
     }
 }
@@ -44,13 +44,25 @@ mod tests {
         let info = platform_info();
         assert!(["macos", "windows", "linux", "unknown"].contains(&info.os));
         assert!(!info.capture_backend.is_empty());
-        assert_eq!(info.system_audio_supported, info.capture_backend != "unavailable (PulseAudio port pending)" && info.os != "unknown");
+        assert_eq!(
+            info.system_audio_supported,
+            matches!(info.os, "macos" | "windows" | "linux")
+        );
     }
 
     #[test]
     fn capability_table_is_the_single_source_for_each_host() {
-        assert_eq!(info("macos", "ScreenCaptureKit", true).system_audio_supported, true);
-        assert_eq!(info("windows", "WASAPI loopback", true).system_audio_supported, true);
-        assert_eq!(info("linux", "unavailable (PulseAudio port pending)", false).system_audio_supported, false);
+        assert_eq!(
+            info("macos", "ScreenCaptureKit", true).system_audio_supported,
+            true
+        );
+        assert_eq!(
+            info("windows", "WASAPI loopback", true).system_audio_supported,
+            true
+        );
+        assert_eq!(
+            info("linux", "PulseAudio/PipeWire monitor", true).system_audio_supported,
+            true
+        );
     }
 }

@@ -543,6 +543,7 @@ dependencies = [
  "wisp-loopback",
  "wisp-models",
  "wisp-pipeline",
+ "wisp-pulseloopback",
  "wisp-screencapture",
 ]
 
@@ -2741,6 +2742,14 @@ name = "wisp-pipeline"
 version = "0.0.0"
 dependencies = [
  "wisp-audio",
+ "wisp-core",
+]
+
+[[package]]
+name = "wisp-pulseloopback"
+version = "0.0.0"
+dependencies = [
+ "cpal",
  "wisp-core",
 ]
 

@@ -40,6 +40,10 @@ core-graphics = "0.24"
 [target.'cfg(windows)'.dependencies]
 wisp-loopback = { path = "../vendor/wisp/crates/wisp-loopback" }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Local crate (not inside the Wisp submodule) so the monitor-source port ships with this bridge.
+wisp-pulseloopback = { path = "crates/wisp-pulseloopback" }
+
 [[bin]]
 name = "duosub-bridge"
 path = "src/main.rs"

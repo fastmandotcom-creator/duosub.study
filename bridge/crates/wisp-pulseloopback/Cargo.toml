@@ -1,0 +1,17 @@
+[package]
+name = "wisp-pulseloopback"
+version = "0.0.0"
+edition = "2021"
+description = "Linux system-audio capture from PulseAudio/PipeWire monitor sources"
+license = "MIT"
+
+[dependencies]
+wisp-core = { path = "../../../vendor/wisp/crates/wisp-core" }
+
+# cpal pulls the ALSA backend only on Linux; on other hosts this crate still compiles (pure
+# device-name helpers + tests) so the whole workspace can be checked on macOS CI.
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = "0.15"
+
+[lints.rust]
+unsafe_code = "warn"

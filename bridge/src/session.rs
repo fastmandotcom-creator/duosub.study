@@ -368,7 +368,8 @@ fn open_streams(requested: &[String]) -> Result<OpenedStreams> {
     Ok((streams, warnings))
 }
 
-/// System/meeting audio capture — ScreenCaptureKit on macOS, WASAPI loopback on Windows.
+/// System/meeting audio capture — ScreenCaptureKit (macOS), WASAPI loopback (Windows),
+/// PulseAudio/PipeWire monitor (Linux).
 /// The source is built lazily at session start; the health check reports only what the host
 /// supports (compile-time), so probing permission state is the caller's problem, not ours.
 #[cfg(target_os = "macos")]
@@ -381,10 +382,15 @@ fn open_system_source() -> std::result::Result<wisp_loopback::WasapiLoopbackSour
     wisp_loopback::WasapiLoopbackSource::new()
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
+fn open_system_source() -> std::result::Result<wisp_pulseloopback::PulseLoopbackSource, WispError> {
+    wisp_pulseloopback::PulseLoopbackSource::new()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 fn open_system_source() -> std::result::Result<(), WispError> {
     Err(WispError::Audio(
-        "system audio capture is macOS (ScreenCaptureKit) / Windows (WASAPI loopback) only"
+        "system audio capture requires macOS (ScreenCaptureKit), Windows (WASAPI) or Linux (PulseAudio monitor)"
             .to_owned(),
     ))
 }

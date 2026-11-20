@@ -19,7 +19,9 @@ Four layers, one wire contract. Nothing above the bridge knows which OS it runs 
 │ capture · VAD · ASR engines  │
 │ macOS: SCK + Apple Speech    │
 │ Windows: WASAPI + Whisper    │
-│ Linux: cpal mic (system TBD) │
+│ Linux: PulseAudio monitor    │
+│        (bridge/crates/       │
+│         wisp-pulseloopback)  │
 └──────────────────────────────┘
 ```
 

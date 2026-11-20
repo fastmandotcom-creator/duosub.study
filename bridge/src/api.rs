@@ -24,7 +24,10 @@ use serde_json::json;
 
 use crate::bus::EventBus;
 use crate::config::BridgeConfig;
-use crate::contract::{BridgeEvent, HealthResponse, PollResponse, StartRequest};
+use crate::contract::{
+    BridgeEvent, ClaimRequest, HealthResponse, OwnerIdRequest, OwnerResponse, OwnerStatus,
+    PollResponse, StartRequest,
+};
 use crate::session::{
     request_system_audio_permission, AsrModel, LiveSession, health as build_health,
     poll_response, start_session, stop_session,
@@ -53,6 +56,73 @@ struct SlotState {
 
 fn session_slot() -> &'static Mutex<SlotState> {
     SESSION.get_or_init(|| Mutex::new(SlotState::default()))
+}
+
+// ---------------------------------------------------------------------------
+// Controller lease (advisory) — who is driving the single capture session
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct Lease {
+    id: String,
+    kind: String,
+    last_seen_ms: i64,
+}
+
+static OWNER: OnceLock<Mutex<Option<Lease>>> = OnceLock::new();
+const LEASE_TTL_MS: i64 = 30_000;
+
+fn owner_slot() -> &'static Mutex<Option<Lease>> {
+    OWNER.get_or_init(|| Mutex::new(None))
+}
+
+fn lease_stale(last_seen_ms: i64, now_ms: i64) -> bool {
+    now_ms.saturating_sub(last_seen_ms) >= LEASE_TTL_MS
+}
+
+fn prune_lease(slot: &mut Option<Lease>, now_ms: i64) {
+    if slot.as_ref().is_some_and(|lease| lease_stale(lease.last_seen_ms, now_ms)) {
+        *slot = None;
+    }
+}
+
+fn owner_response() -> OwnerResponse {
+    let now = now_ms_i64();
+    let mut slot = owner_slot().lock().unwrap();
+    prune_lease(&mut slot, now);
+    let owner = slot.as_ref().map(|lease| OwnerStatus {
+        id: lease.id.clone(),
+        kind: lease.kind.clone(),
+        age_ms: now.saturating_sub(lease.last_seen_ms).max(0) as u64,
+    });
+    let session_active = session_slot().lock().unwrap().session.is_some();
+    OwnerResponse { owner, session_active }
+}
+
+/// Claim the lease, or refresh it when the same controller calls again. A different, still-fresh
+/// controller gets a 409 that names the current owner.
+fn claim_lease(id: &str, kind: &str) -> Result<(), String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("lease id is required".to_owned());
+    }
+    let now = now_ms_i64();
+    let mut slot = owner_slot().lock().unwrap();
+    prune_lease(&mut slot, now);
+    match slot.as_ref() {
+        Some(lease) if lease.id != id => Err(format!(
+            "capture is controlled by '{}' ({}) — release it or wait for its heartbeat to expire",
+            lease.id, lease.kind
+        )),
+        _ => {
+            *slot = Some(Lease {
+                id: id.to_owned(),
+                kind: kind.to_owned(),
+                last_seen_ms: now,
+            });
+            Ok(())
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -218,6 +288,13 @@ async fn sessions_start(
 ) -> Response {
     if !authorized(&headers, q.token.as_deref(), &state.cfg.token) {
         return unauthenticated().await;
+    }
+    // A controller that names itself claims the advisory lease. Legacy clients omit `owner`,
+    // so this stays fully backward compatible with the LiveCode extension.
+    if !body.owner.trim().is_empty() {
+        if let Err(message) = claim_lease(&body.owner, "controller") {
+            return json_error(StatusCode::CONFLICT, &message);
+        }
     }
 
     // A session start IS proof that a client is present: reset the orphan window so a freshly
@@ -482,6 +559,68 @@ fn to_sse_event(ev: &BridgeEvent) -> axum::response::sse::Event {
 // Router + server
 // ---------------------------------------------------------------------------
 
+/// `GET /sessions/owner` — who holds the advisory lease, and whether a session is active.
+async fn sessions_owner(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<HealthQuery>,
+) -> Response {
+    if !authorized(&headers, q.token.as_deref(), &state.cfg.token) {
+        return unauthenticated().await;
+    }
+    json_ok(serde_json::to_value(owner_response()).unwrap_or_default())
+}
+
+/// `POST /sessions/claim` — `{id, kind?}` → take or refresh the lease.
+async fn sessions_claim(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<HealthQuery>,
+    axum::Json(body): axum::Json<ClaimRequest>,
+) -> Response {
+    if !authorized(&headers, q.token.as_deref(), &state.cfg.token) {
+        return unauthenticated().await;
+    }
+    match claim_lease(&body.id, &body.kind) {
+        Ok(()) => json_ok(json!({ "claimed": true, "id": body.id })),
+        Err(message) => json_error(StatusCode::CONFLICT, &message),
+    }
+}
+
+/// `POST /sessions/heartbeat` — `{id}` → keep a fresh lease alive.
+async fn sessions_heartbeat(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<HealthQuery>,
+    axum::Json(body): axum::Json<OwnerIdRequest>,
+) -> Response {
+    if !authorized(&headers, q.token.as_deref(), &state.cfg.token) {
+        return unauthenticated().await;
+    }
+    match claim_lease(&body.id, "controller") {
+        Ok(()) => json_ok(json!({ "alive": true })),
+        Err(message) => json_error(StatusCode::CONFLICT, &message),
+    }
+}
+
+/// `POST /sessions/release` — `{id}` → give up the lease (no-op for another id).
+async fn sessions_release(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<HealthQuery>,
+    axum::Json(body): axum::Json<OwnerIdRequest>,
+) -> Response {
+    if !authorized(&headers, q.token.as_deref(), &state.cfg.token) {
+        return unauthenticated().await;
+    }
+    let mut slot = owner_slot().lock().unwrap();
+    let matches = slot.as_ref().is_some_and(|lease| lease.id == body.id);
+    if matches {
+        *slot = None;
+    }
+    json_ok(json!({ "released": matches }))
+}
+
 /// `POST /permissions/open-settings` — requests the user's Screen Recording grant and opens the
 /// macOS pane. Chrome cannot open `x-apple:` URLs directly, so the extension routes its button here.
 async fn permissions_open_settings(
@@ -526,6 +665,10 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/sessions/start", post(sessions_start))
         .route("/sessions/stop", post(sessions_stop))
+        .route("/sessions/owner", get(sessions_owner))
+        .route("/sessions/claim", post(sessions_claim))
+        .route("/sessions/heartbeat", post(sessions_heartbeat))
+        .route("/sessions/release", post(sessions_release))
         .route("/models/select", post(models_select))
         .route("/events", get(events))
         .route("/permissions/open-settings", post(permissions_open_settings))
@@ -607,4 +750,30 @@ fn json_error(status: StatusCode, message: &str) -> Response {
             .unwrap_or_default(),
         ))
         .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lease_expires_after_the_heartbeat_window() {
+        assert!(!lease_stale(1_000, 1_000 + LEASE_TTL_MS - 1));
+        assert!(lease_stale(1_000, 1_000 + LEASE_TTL_MS));
+        // A clock that moved backwards never silently kills a fresh lease.
+        assert!(!lease_stale(10_000, 1_000));
+    }
+
+    #[test]
+    fn prune_drops_only_stale_leases() {
+        let mut slot = Some(Lease {
+            id: "desktop".to_owned(),
+            kind: "controller".to_owned(),
+            last_seen_ms: 1_000,
+        });
+        prune_lease(&mut slot, 2_000);
+        assert!(slot.is_some());
+        prune_lease(&mut slot, 1_000 + LEASE_TTL_MS);
+        assert!(slot.is_none());
+    }
 }

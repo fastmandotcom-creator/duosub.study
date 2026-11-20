@@ -1,0 +1,50 @@
+name: desktop-release
+
+on:
+  push:
+    tags: ['desktop-v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies and test
+        run: |
+          npm ci
+          npm test
+          npm run typecheck
+
+      - name: Import Developer ID certificate
+        if: ${{ secrets.DUOSUB_CERT_P12 != '' }}
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.DUOSUB_CERT_P12 }}
+          p12-password: ${{ secrets.DUOSUB_CERT_PASSWORD }}
+
+      - name: Require a stable signing identity for releases
+        if: ${{ secrets.DUOSUB_SIGN_IDENTITY == '' }}
+        run: |
+          echo "A release must be signed with a stable Developer ID (DUOSUB_SIGN_IDENTITY)." >&2
+          exit 1
+
+      - name: Build, sign and notarize the DMG
+        env:
+          DUOSUB_SIGN_IDENTITY: ${{ secrets.DUOSUB_SIGN_IDENTITY }}
+          DUOSUB_NOTARY_PROFILE: ${{ secrets.DUOSUB_NOTARY_PROFILE }}
+        run: bash scripts/build-desktop.sh
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+          generate_release_notes: true

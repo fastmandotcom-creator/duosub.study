@@ -1,0 +1,14 @@
+{
+  "name": "duosub-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": ["desktop", "packages/*"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "npm run dev -w @duosub/desktop",
+    "build": "npm run build -w @duosub/desktop",
+    "test": "npm test -w @duosub/caption-contract && npm test -w @duosub/desktop",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "mock": "node scripts/mock-bridge.mjs"
+  }
+}

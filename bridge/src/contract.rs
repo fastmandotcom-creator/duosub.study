@@ -163,6 +163,9 @@ pub struct StartRequest {
     /// Default (absent) keeps the existing ASR session behavior.
     #[serde(default = "default_mode")]
     pub mode: String,
+    /// Optional controller id for the multi-client lease. Old clients omit it and keep working.
+    #[serde(default)]
+    pub owner: String,
 }
 
 fn default_mode() -> String {
@@ -182,6 +185,34 @@ pub struct PcmFramePayload {
 
 fn default_language() -> String {
     "auto".to_owned()
+}
+
+/// A controller holding the (advisory) capture lease. The hard guard remains the single session
+/// slot — the lease merely lets a second GUI client say *who* owns that slot and show a useful
+/// message instead of a bare 409. It expires automatically after a heartbeat timeout.
+#[derive(Debug, Clone, Serialize)]
+pub struct OwnerStatus {
+    pub id: String,
+    pub kind: String,
+    pub age_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OwnerResponse {
+    pub owner: Option<OwnerStatus>,
+    pub session_active: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ClaimRequest {
+    pub id: String,
+    #[serde(default)]
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct OwnerIdRequest {
+    pub id: String,
 }
 
 /// Error envelope for all non-2xx responses.

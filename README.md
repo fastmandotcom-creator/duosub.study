@@ -1,8 +1,22 @@
-# DuoSub Bridge
+# DuoSub
 
-**Live captions from your own machine.** The bridge captures system audio (and your microphone),
-runs on-device speech recognition, and streams the transcript to the LiveCode browser extension on
-`http://127.0.0.1:4499`.
+**Live captions from your own machine.** This repository holds two products that share one caption
+protocol on `http://127.0.0.1:4499`:
+
+| Path | Product | Role |
+| --- | --- | --- |
+| `bridge/` | DuoSub Bridge | headless macOS capture + on-device ASR + SSE stream |
+| `desktop/` | **DuoSub Desktop** | menubar app: UI, text translation, overlay, hotkeys, profiles, history |
+| `packages/caption-contract/` | `@duosub/caption-contract` | shared wire types + parsers (npm-publishable) |
+
+The LiveCode browser extension is a third client of the same bridge; its HTTP contract is pinned by
+golden tests in both repositories.
+
+See [`desktop/README.md`](desktop/README.md) for the app, and the bridge notes below for the engine.
+
+---
+
+## DuoSub Bridge
 
 No account. No cloud. No token. No API key. Audio never leaves your computer.
 

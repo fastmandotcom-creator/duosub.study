@@ -1,6 +1,7 @@
 mod bridge;
 mod commands;
 mod hotkeys;
+mod platform;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -92,6 +93,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_frontmost_app,
+            commands::host_info,
             commands::show_overlay,
             commands::set_autostart,
             commands::set_hotkeys,

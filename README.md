@@ -12,7 +12,9 @@ protocol on `http://127.0.0.1:4499`:
 The LiveCode browser extension is a third client of the same bridge; its HTTP contract is pinned by
 golden tests in both repositories.
 
-See [`desktop/README.md`](desktop/README.md) for the app, and the bridge notes below for the engine.
+See [`desktop/README.md`](desktop/README.md) for the app, [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+for layer responsibilities, and [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md) for the
+macOS / Windows / Linux port status. The bridge notes follow below.
 
 ---
 

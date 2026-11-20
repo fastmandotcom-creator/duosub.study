@@ -107,6 +107,19 @@ describe('health + result parsers', () => {
     expect(health).not.toBeNull();
     expect(health?.apple_speech_available).toBe(false);
     expect(health?.session?.warnings).toEqual(['microphone-unavailable']);
+    expect(health?.platform).toBe('unknown');
+    expect(health?.system_audio_supported).toBe(true); // legacy bridge default
+  });
+
+  it('reads the platform capability block from a current bridge', () => {
+    const health = parseHealth({
+      ok: true, family: 'whisper-medium', model_id: 'whisper-medium',
+      platform: 'linux', arch: 'x86_64', capture_backend: 'unavailable',
+      system_audio_supported: false, system_audio: 'not-required',
+    });
+    expect(health?.platform).toBe('linux');
+    expect(health?.system_audio_supported).toBe(false);
+    expect(health?.capture_backend).toBe('unavailable');
   });
 
   it('rejects health without the identity fields', () => {

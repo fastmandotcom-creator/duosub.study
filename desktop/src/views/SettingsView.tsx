@@ -3,6 +3,7 @@ import { useAppStore } from '../store/useAppStore';
 import { translate } from '../i18n';
 import type { TranslationProvider } from '../translation/types';
 import type { Profile } from '../profiles/profiles';
+import { OS_LABEL } from '../platform/os';
 
 const FAMILIES = [
   { id: 'apple-speech', label: 'Apple Speech (on-device)', hint: 'macOS 26+ · không tải model · en/zh/ja/ko/yue' },
@@ -41,6 +42,8 @@ export function SettingsView() {
   const settings = useAppStore((s) => s.settings);
   const setSettings = useAppStore((s) => s.setSettings);
   const health = useAppStore((s) => s.health);
+  const host = useAppStore((s) => s.host);
+  const capabilities = useAppStore((s) => s.capabilities);
   const profiles = useAppStore((s) => s.profiles);
   const activeProfileId = useAppStore((s) => s.activeProfileId);
   const autoProfile = useAppStore((s) => s.autoProfile);
@@ -68,7 +71,16 @@ export function SettingsView() {
         </div>
       </header>
 
-      <Section title="Caption source" subtitle=" Âm thanh luôn được nhận dạng trên máy.">
+      <Section
+        title="Caption source"
+        subtitle={`${OS_LABEL[host]} · ${health?.capture_backend ?? 'bridge chưa kết nối'} · ${capabilities.systemAudioCapture ? 'có capture âm thanh hệ thống' : 'chưa có backend capture hệ thống'}`}
+      >
+        {!capabilities.systemAudioCapture && (
+          <div className="alert info">
+            Bản port Linux đang dùng micro (cpal); backend PulseAudio/PipeWire cho âm thanh cuộc họp
+            sẽ được thêm trong bridge/src/platform.rs.
+          </div>
+        )}
         <div className="field-grid">
           <label className="field">
             <span>{t('sourceLanguage')}</span>
@@ -86,7 +98,15 @@ export function SettingsView() {
           <label className="field">
             <span>{t('modelFamily')}</span>
             <select value={settings.family} onChange={(e) => void useAppStore.getState().selectFamily(e.target.value)}>
-              {FAMILIES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+              {FAMILIES.map((item) => (
+                <option
+                  key={item.id}
+                  value={item.id}
+                  disabled={item.id === 'apple-speech' && !capabilities.appleSpeech}
+                >
+                  {item.label}
+                </option>
+              ))}
             </select>
             <small>{family.hint}</small>
           </label>

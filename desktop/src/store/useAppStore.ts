@@ -11,6 +11,7 @@ import {
 import { emitSafe, invokeSafe } from '../platform/tauri';
 import { DEFAULT_PROFILES, matchProfile, type Profile } from '../profiles/profiles';
 import { translate, type Locale } from '../i18n';
+import { capabilitiesFor, defaultFamilyFor, detectHostOS, type HostCapabilities, type HostOS } from '../platform/os';
 import { CloudTranslator, NoopTranslator } from '../translation/cloudTranslator';
 import { TranslationPipeline } from '../translation/pipeline';
 import type { Translator, TranslationProvider } from '../translation/types';
@@ -66,6 +67,8 @@ export interface AppState {
   sessions: SessionRecord[];
   overlayVisible: boolean;
   version: string;
+  host: HostOS;
+  capabilities: HostCapabilities;
 
   init: () => void;
   setView: (view: AppView) => void;
@@ -114,6 +117,10 @@ export const DEFAULT_SETTINGS: Settings = {
 
 const APP_VERSION = '1.0.0';
 const STREAM_KEY = 'duosub.desktop.v1';
+
+/** Before the native shell answers, the UA is the only host hint available. */
+const INITIAL_HOST = detectHostOS(null, typeof navigator === 'undefined' ? '' : navigator.userAgent);
+const BASE_SETTINGS: Settings = { ...DEFAULT_SETTINGS, family: defaultFamilyFor(INITIAL_HOST) };
 
 let client = new BridgeClient(DEFAULT_SETTINGS.bridgeUrl, DEFAULT_SETTINGS.bridgeToken);
 let unsubscribeStream: (() => void) | null = null;
@@ -187,7 +194,7 @@ export const useAppStore = create<AppState>()(
       };
 
       return {
-        settings: DEFAULT_SETTINGS,
+        settings: BASE_SETTINGS,
         onboardingDone: false,
         view: 'live',
         connection: 'offline',
@@ -206,9 +213,16 @@ export const useAppStore = create<AppState>()(
         sessions: [],
         overlayVisible: false,
         version: APP_VERSION,
+        host: INITIAL_HOST,
+        capabilities: capabilitiesFor(INITIAL_HOST),
 
         init: () => {
           if (pipeline !== null) return;
+          void invokeSafe<{ os: string }>('host_info').then((info) => {
+            if (info?.os === undefined) return;
+            const host = detectHostOS(info.os);
+            if (host !== get().host) set({ host, capabilities: capabilitiesFor(host) });
+          });
           pipeline = new TranslationPipeline(currentTranslator, get().settings.targetLanguage, {
             onUpdate: (rowId, text, state) => get().setTranslation(rowId, text, state),
             debounceMs: 350,
@@ -276,7 +290,13 @@ export const useAppStore = create<AppState>()(
         refreshHealth: async () => {
           try {
             const health = await client.health();
-            set({ health, connection: 'online', lastError: '' });
+            const host = detectHostOS(health.platform);
+            set({
+              health,
+              connection: 'online',
+              lastError: '',
+              ...(host !== get().host ? { host, capabilities: capabilitiesFor(host) } : {}),
+            });
             return;
           } catch (error) {
             // First offline tick: ask the native shell to spawn the bundled/local bridge once.
@@ -322,7 +342,8 @@ export const useAppStore = create<AppState>()(
             let family = state.settings.family;
             const routed =
               family === 'apple-speech' &&
-              (health.apple_speech_available === false ||
+              (!state.capabilities.appleSpeech ||
+                health.apple_speech_available === false ||
                 (state.settings.language !== 'auto' &&
                   !health.supported_languages.includes(state.settings.language)));
             if (routed) family = 'whisper-medium';
@@ -554,7 +575,7 @@ export const useAppStore = create<AppState>()(
           ...current,
           ...saved,
           settings: {
-            ...DEFAULT_SETTINGS,
+            ...BASE_SETTINGS,
             ...saved.settings,
             apiKeys: { ...DEFAULT_SETTINGS.apiKeys, ...saved.settings?.apiKeys },
             models: { ...DEFAULT_SETTINGS.models, ...saved.settings?.models },

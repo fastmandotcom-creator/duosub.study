@@ -8,6 +8,7 @@ mod api;
 mod bus;
 mod config;
 mod contract;
+mod platform;
 mod session;
 
 use config::BridgeConfig;

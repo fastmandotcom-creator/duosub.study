@@ -1,7 +1,8 @@
 import { useAppStore } from '../store/useAppStore';
 import { translate } from '../i18n';
 import { buildDiagnosticReport } from '../diagnostics/diagnostics';
-import { DUOSUB_INSTALL_COMMAND } from '../bridge/install';
+import { installHintFor } from '../bridge/install';
+import { OS_LABEL } from '../platform/os';
 import { writeTextToClipboard } from '../platform/tauri';
 
 export function DiagnosticsView() {
@@ -12,6 +13,7 @@ export function DiagnosticsView() {
   const rows = useAppStore((s) => s.rows);
   const lastError = useAppStore((s) => s.lastError);
   const settings = useAppStore((s) => s.settings);
+  const host = useAppStore((s) => s.host);
   const version = useAppStore((s) => s.version);
   const checkForUpdates = useAppStore((s) => s.checkForUpdates);
   const t = (key: Parameters<typeof translate>[1]) => translate(settings.locale, key);
@@ -25,6 +27,7 @@ export function DiagnosticsView() {
     appVersion: version,
     rowsInMemory: rows.length,
     lastError,
+    host,
   });
 
   return (
@@ -50,8 +53,12 @@ export function DiagnosticsView() {
       <section className="settings-section">
         <div className="section-head"><h2>{t('installBridge')}</h2></div>
         <div className="section-body">
-          <code className="code-block">{DUOSUB_INSTALL_COMMAND}</code>
-          <p className="muted">Log bridge: ~/Library/Logs/duosub-bridge.log</p>
+          <code className="code-block">{installHintFor(host).command ?? installHintFor(host).note}</code>
+          <p className="muted">
+            {host === 'macos'
+              ? 'Log bridge: ~/Library/Logs/duosub-bridge.log'
+              : `Host: ${OS_LABEL[host]} · log do bridge ghi theo OS tương ứng.`}
+          </p>
         </div>
       </section>
     </div>

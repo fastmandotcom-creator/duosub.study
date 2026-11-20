@@ -9,6 +9,7 @@ export interface DiagnosticContext {
   appVersion: string;
   rowsInMemory: number;
   lastError: string;
+  host: string;
 }
 
 /** One-click support bundle. Deliberately plain text: easy to paste into an issue. */
@@ -19,6 +20,11 @@ export function buildDiagnosticReport(ctx: DiagnosticContext): string {
     'DuoSub Desktop — diagnostics',
     `generated               ${new Date().toISOString()}`,
     line('app version', ctx.appVersion),
+    line('host (app)', ctx.host),
+    line('host (bridge)', health?.platform ?? 'unknown'),
+    line('arch', health?.arch ?? 'unknown'),
+    line('capture backend', health?.capture_backend ?? 'unknown'),
+    line('system audio support', health?.system_audio_supported ?? 'unknown'),
     line('bridge url', ctx.bridgeUrl),
     line('connection', ctx.connection),
     line('bridge ok', health?.ok ?? 'unknown'),

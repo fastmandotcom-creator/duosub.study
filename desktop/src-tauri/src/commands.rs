@@ -1,24 +1,21 @@
 use tauri::{AppHandle, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
-use crate::hotkeys;
+use crate::{hotkeys, platform};
 
-/// Frontmost app name, used by the "profile follows the active app" feature.
+/// Frontmost app name, used by the "profile follows the active app" feature. The OS-specific
+/// implementation lives in `platform/`; unsupported hosts return an empty string (manual profiles).
 #[tauri::command]
 pub fn get_frontmost_app() -> String {
-    #[cfg(target_os = "macos")]
-    {
-        const SCRIPT: &str =
-            "tell application \"System Events\" to get name of first application process whose frontmost is true";
-        match std::process::Command::new("osascript").args(["-e", SCRIPT]).output() {
-            Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).trim().to_string(),
-            _ => String::new(),
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        String::new()
-    }
+    platform::frontmost_app()
+}
+
+#[tauri::command]
+pub fn host_info() -> serde_json::Value {
+    serde_json::json!({
+        "os": platform::host_os().as_str(),
+        "default_family": platform::default_family(),
+    })
 }
 
 #[tauri::command]

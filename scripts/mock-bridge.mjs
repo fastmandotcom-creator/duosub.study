@@ -42,6 +42,10 @@ const health = () => ({
   supported_languages: ['auto', 'en', 'vi', 'ja', 'zh', 'ko', 'yue'],
   system_audio: 'granted',
   apple_speech_available: true,
+  platform: 'macos',
+  arch: 'aarch64',
+  capture_backend: 'ScreenCaptureKit',
+  system_audio_supported: true,
   session: {
     active: sessionActive,
     session_id: sessionActive ? 'mock-session' : null,

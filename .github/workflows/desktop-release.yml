@@ -7,7 +7,18 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: macos
+          - os: windows-latest
+            target: windows
+          - os: ubuntu-22.04
+            target: linux
+    runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,28 +34,49 @@ jobs:
           npm test
           npm run typecheck
 
-      - name: Import Developer ID certificate
-        if: ${{ secrets.DUOSUB_CERT_P12 != '' }}
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Linux system dependencies (WebKit2GTK + tray)
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Import Developer ID certificate (macOS only)
+        if: matrix.target == 'macos' && secrets.DUOSUB_CERT_P12 != ''
         uses: apple-actions/import-codesign-certs@v3
         with:
           p12-file-base64: ${{ secrets.DUOSUB_CERT_P12 }}
           p12-password: ${{ secrets.DUOSUB_CERT_PASSWORD }}
 
-      - name: Require a stable signing identity for releases
-        if: ${{ secrets.DUOSUB_SIGN_IDENTITY == '' }}
+      - name: Require stable signing identity for macOS releases
+        if: matrix.target == 'macos' && secrets.DUOSUB_SIGN_IDENTITY == ''
         run: |
-          echo "A release must be signed with a stable Developer ID (DUOSUB_SIGN_IDENTITY)." >&2
+          echo "A macOS release must be signed with a stable Developer ID (DUOSUB_SIGN_IDENTITY)." >&2
           exit 1
 
-      - name: Build, sign and notarize the DMG
+      - name: Build signed/notarized DMG (macOS)
+        if: matrix.target == 'macos'
         env:
           DUOSUB_SIGN_IDENTITY: ${{ secrets.DUOSUB_SIGN_IDENTITY }}
           DUOSUB_NOTARY_PROFILE: ${{ secrets.DUOSUB_NOTARY_PROFILE }}
         run: bash scripts/build-desktop.sh
 
-      - name: Publish release
+      - name: Build MSI + NSIS (Windows)
+        if: matrix.target == 'windows'
+        run: npm run tauri build
+
+      - name: Build DEB + AppImage (Linux)
+        if: matrix.target == 'linux'
+        run: npm run tauri build
+
+      - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
+          generate_release_notes: true
           files: |
             desktop/src-tauri/target/release/bundle/dmg/*.dmg
-          generate_release_notes: true
+            desktop/src-tauri/target/release/bundle/msi/*.msi
+            desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage

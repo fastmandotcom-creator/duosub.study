@@ -37,6 +37,12 @@ export interface HealthResponse {
   system_audio: SystemAudioState | string;
   /** macOS 26+ SpeechAnalyzer availability. Older bridges omit it → false. */
   apple_speech_available: boolean;
+  /** Host platform description — clients must not infer capabilities from the OS string alone. */
+  platform: 'macos' | 'windows' | 'linux' | 'unknown' | string;
+  arch: string;
+  capture_backend: string;
+  /** False on a host with no system-meeting-audio backend (e.g. Linux today). */
+  system_audio_supported: boolean;
   session: SessionStatus | null;
 }
 
@@ -76,6 +82,11 @@ export function parseHealth(v: unknown): HealthResponse | null {
     supported_languages: asStringArray(o.supported_languages),
     system_audio: asString(o.system_audio) ?? 'denied',
     apple_speech_available: asBool(o.apple_speech_available),
+    platform: asString(o.platform) ?? 'unknown',
+    arch: asString(o.arch) ?? '',
+    capture_backend: asString(o.capture_backend) ?? 'unknown',
+    // Old bridges predate this field and were macOS-only: assume support rather than blocking them.
+    system_audio_supported: typeof o.system_audio_supported === 'boolean' ? o.system_audio_supported : true,
     session: parseSessionStatus(o.session),
   };
 }

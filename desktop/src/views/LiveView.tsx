@@ -3,7 +3,7 @@ import { useAppStore } from '../store/useAppStore';
 import { translate } from '../i18n';
 import { StatusPill } from '../components/StatusPill';
 import { formatTimestamp } from '../history/export';
-import { DUOSUB_INSTALL_COMMAND, DUOSUB_RELEASES_URL } from '../bridge/install';
+import { installHintFor } from '../bridge/install';
 import { writeTextToClipboard } from '../platform/tauri';
 
 export function LiveView() {
@@ -15,6 +15,8 @@ export function LiveView() {
   const warnings = useAppStore((s) => s.warnings);
   const overlayVisible = useAppStore((s) => s.overlayVisible);
   const settings = useAppStore((s) => s.settings);
+  const host = useAppStore((s) => s.host);
+  const capabilities = useAppStore((s) => s.capabilities);
   const start = useAppStore((s) => s.start);
   const stop = useAppStore((s) => s.stop);
   const toggleOverlay = useAppStore((s) => s.toggleOverlay);
@@ -30,7 +32,8 @@ export function LiveView() {
   }, [rows.length]);
 
   const visible = rows.slice(-60);
-  const permissionDenied = health?.system_audio === 'denied';
+  const permissionDenied = health?.system_audio === 'denied' && capabilities.permissionPane;
+  const install = installHintFor(host);
 
   return (
     <div className="view live-view">
@@ -60,14 +63,16 @@ export function LiveView() {
         <div className="alert warning">
           <div>
             <strong>{t('bridgeMissing')}</strong>
-            <p>{t('bridgeMissingHint')}</p>
-            <code>{DUOSUB_INSTALL_COMMAND}</code>
+            <p>{install.note}</p>
+            {install.command !== null && <code>{install.command}</code>}
           </div>
           <div className="alert-actions">
-            <button className="button ghost" onClick={() => void writeTextToClipboard(DUOSUB_INSTALL_COMMAND)}>
-              Copy
-            </button>
-            <a className="button ghost" href={DUOSUB_RELEASES_URL} target="_blank" rel="noreferrer">
+            {install.command !== null && (
+              <button className="button ghost" onClick={() => void writeTextToClipboard(install.command ?? '')}>
+                Copy
+              </button>
+            )}
+            <a className="button ghost" href={install.url} target="_blank" rel="noreferrer">
               {t('installBridge')}
             </a>
           </div>

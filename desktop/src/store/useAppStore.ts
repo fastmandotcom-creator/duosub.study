@@ -289,7 +289,12 @@ export const useAppStore = create<AppState>()(
         capabilities: capabilitiesFor(INITIAL_HOST),
 
         init: () => {
-          if (pipeline !== null) return;
+          // Idempotent: HMR can leave module-level timers/pipeline alive while a fresh React tree
+          // calls init() again. Always re-arm the session decision even if the rest is set up.
+          if (pipeline !== null) {
+            ensureSession('stream-online');
+            return;
+          }
           // Bound persisted data even if the user enabled history at some point in the past.
           set({
             sessions: get().settings.keepHistory
@@ -311,7 +316,9 @@ export const useAppStore = create<AppState>()(
           reconfigurePipeline();
           restartStream();
           if (get().settings.captionEngine === 'system-live') startSystemPolling();
-          // Bridge auto-warm is driven by App's effect: it must run AFTER persist rehydration.
+          // Ask once after the store is hydrated. SSE onopen is the other trigger; having both
+          // covers the case where EventSource was already open before init() ran.
+          ensureSession('stream-online');
           void get().refreshHealth();
           // SSE onopen already flips the pill to online; health only needs a slow safety poll.
           healthTimer = setInterval(() => void get().refreshHealth(), 10_000);

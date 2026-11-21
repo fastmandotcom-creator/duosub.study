@@ -1,5 +1,8 @@
 name: desktop-release
 
+permissions:
+  contents: write
+
 # Simple release: push a tag like `desktop-v1.0.0` and CI builds installers for all three hosts.
 # Signing is OPTIONAL — add the secrets below whenever you want signed artifacts; without them the
 # release still publishes (macOS: right-click → Open).
@@ -85,6 +88,7 @@ jobs:
 
       - name: Build Windows MSI + NSIS
         if: matrix.target == 'windows'
+        working-directory: desktop
         run: npm run tauri build
 
       - name: Authenticode-sign Windows installers (optional)
@@ -99,6 +103,7 @@ jobs:
 
       - name: Build Linux DEB + AppImage
         if: matrix.target == 'linux'
+        working-directory: desktop
         run: npm run tauri build
 
       - name: GPG-sign Linux packages (optional)

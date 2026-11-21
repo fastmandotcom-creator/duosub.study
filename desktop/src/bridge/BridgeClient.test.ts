@@ -97,6 +97,31 @@ describe('BridgeClient', () => {
     expect(second.closed).toBe(true);
   });
 
+  it('detects a restarted bridge whose seq counter reset to zero', () => {
+    vi.useFakeTimers();
+    const client = new BridgeClient();
+    let since = 0;
+    const seen: number[] = [];
+    let resets = 0;
+    client.subscribe({
+      onEvent: (event) => seen.push(event.seq),
+      onState: () => undefined,
+      getSince: () => since,
+      onReset: () => { resets += 1; since = 0; },
+    });
+
+    const source = FakeEventSource.instances[0];
+    const frame = (seq: number) =>
+      `{"seq":${seq},"ts":1,"kind":"error","message":"m"}`;
+    source.emit('error', frame(120));
+    // Simulate a fresh bridge process: seq starts again at 0.
+    source.emit('error', frame(0));
+    source.emit('error', frame(1));
+
+    expect(resets).toBe(1);
+    expect(seen).toEqual([120, 0, 1]);
+  });
+
   it('treats an absent bridge as an actionable error rather than a raw fetch failure', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
     await expect(new BridgeClient().health()).rejects.toThrow('Không kết nối được bridge');

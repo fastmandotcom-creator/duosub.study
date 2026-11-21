@@ -175,6 +175,11 @@ export const useAppStore = create<AppState>()(
           onEvent: (event) => get().handleEvent(event),
           onState: (connection) => set({ connection }),
           getSince: () => get().lastSeq,
+          onReset: () => {
+            // New bridge process: its seq starts at 0 and the old utterances no longer exist.
+            pipeline?.cancelAll();
+            set({ lastSeq: 0, rows: [], sessionId: '', sessionActive: false, warnings: [] });
+          },
         });
       };
 

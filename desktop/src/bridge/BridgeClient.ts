@@ -25,6 +25,8 @@ export interface SubscribeHandlers {
   onState?: (state: BridgeConnectionState) => void;
   /** Last seq already persisted by the caller, used after a reconnect. */
   getSince?: () => number;
+  /** Bridge process restarted, so its monotonic seq counter started over at 0. */
+  onReset?: () => void;
 }
 
 const DEFAULT_BASE = 'http://127.0.0.1:4499';
@@ -227,6 +229,12 @@ export class BridgeClient {
       const deliver = (event: MessageEvent<string>) => {
         const parsed = parseBridgeEvent(event.data);
         if (parsed === null) return;
+        // A restarted bridge resets its seq ring to 0. Without this, a client that saw seq=500
+        // drops every future event from the fresh process and shows an empty caption list forever.
+        if (parsed.seq < lastSeq && parsed.seq <= 16) {
+          lastSeq = 0;
+          handlers.onReset?.();
+        }
         lastSeq = Math.max(lastSeq, parsed.seq);
         handlers.onEvent(parsed);
       };

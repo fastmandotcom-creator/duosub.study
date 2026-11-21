@@ -720,6 +720,10 @@ export const useAppStore = create<AppState>()(
           settings: {
             ...BASE_SETTINGS,
             ...saved.settings,
+            // Old persisted experiments must not silently change the caption engine or startup.
+            captionEngine: 'bridge-asr',
+            autoStartCaptions: true,
+            includeMicrophone: saved.settings?.includeMicrophone ?? false,
             apiKeys: { ...DEFAULT_SETTINGS.apiKeys, ...saved.settings?.apiKeys },
             models: { ...DEFAULT_SETTINGS.models, ...saved.settings?.models },
           },

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import type { BridgeEvent, HealthResponse, StartResult } from '@duosub/caption-contract';
 import { BridgeClient, BridgeCallError, type BridgeConnectionState } from '../bridge/BridgeClient';
+import { decideSessionAction } from '../session/lifecycle';
 import { newLines } from '../caption/systemCaptions';
 import {
   appendSystemLine,
@@ -374,17 +375,18 @@ export const useAppStore = create<AppState>()(
               lastError: '',
               ...(host !== get().host ? { host, capabilities: capabilitiesFor(host) } : {}),
             });
-            // Self-heal: the bridge's orphan reaper or a bridge restart can stop the session
-            // while the app is open. Re-arm it automatically instead of leaving a dead UI.
-            if (
-              get().settings.autoStartCaptions &&
-              get().settings.captionEngine === 'bridge-asr' &&
-              get().onboardingDone &&
-              !get().sessionActive &&
-              !get().starting &&
-              health.session?.active !== true &&
-              Date.now() - lastAutoStartMs > 15_000
-            ) {
+            // Single lifecycle decision point: no other code path may auto-start a session.
+            const action = decideSessionAction({
+              onboardingDone: get().onboardingDone,
+              autoStart: get().settings.autoStartCaptions,
+              engine: get().settings.captionEngine,
+              localActive: get().sessionActive,
+              starting: get().starting,
+              healthReachable: true,
+              healthSessionActive: health.session?.active === true,
+              sinceLastAttemptMs: Date.now() - lastAutoStartMs,
+            });
+            if (action === 'start') {
               lastAutoStartMs = Date.now();
               void get().start();
             }

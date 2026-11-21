@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import type { BridgeEvent, HealthResponse, StartResult } from '@duosub/caption-contract';
 import { BridgeClient, BridgeCallError, type BridgeConnectionState } from '../bridge/BridgeClient';
-import { decideSessionAction } from '../session/lifecycle';
+import { shouldStartForTrigger } from '../session/lifecycle';
 import { newLines } from '../caption/systemCaptions';
 import {
   appendSystemLine,
@@ -157,8 +157,7 @@ let pipeline: TranslationPipeline | null = null;
 let currentTranslator: Translator | null = null;
 let bridgeSpawnAttempted = false;
 let leaseTimer: ReturnType<typeof setInterval> | null = null;
-/** Timestamp of the last automatic (re)start attempt — retried every 15s, forever. */
-let lastAutoStartMs = 0;
+
 
 function buildTranslator(settings: Settings): Translator | null {
   if (settings.translationProvider === 'none') return new NoopTranslator();
@@ -195,6 +194,27 @@ export const useAppStore = create<AppState>()(
         });
       };
 
+      /** The only automatic way to start/restart a bridge session. */
+      const ensureSession = (trigger: 'stream-online' | 'session-stopped') => {
+        const state = get();
+        const wantsStart = shouldStartForTrigger(trigger, {
+          onboardingDone: state.onboardingDone,
+          autoStart: state.settings.autoStartCaptions,
+          engine: state.settings.captionEngine,
+          localActive: state.sessionActive,
+          starting: state.starting,
+        });
+        if (!wantsStart) return;
+        void client.health().then((health) => {
+          // /health is the authority: a session may already be running (started by another client).
+          if (health.session?.active === true) {
+            set({ sessionActive: true, sessionId: health.session.session_id ?? '' });
+            return;
+          }
+          void get().start();
+        }).catch(() => undefined);
+      };
+
       const restartStream = () => {
         unsubscribeStream?.();
         unsubscribeStream = null;
@@ -202,7 +222,10 @@ export const useAppStore = create<AppState>()(
         client = new BridgeClient(state.settings.bridgeUrl, state.settings.bridgeToken);
         unsubscribeStream = client.subscribe({
           onEvent: (event) => get().handleEvent(event),
-          onState: (connection) => set({ connection }),
+          onState: (connection) => {
+            set({ connection });
+            if (connection === 'online') ensureSession('stream-online');
+          },
           getSince: () => get().lastSeq,
           onReset: () => {
             // New bridge process: its seq starts at 0 and the old utterances no longer exist.
@@ -375,21 +398,6 @@ export const useAppStore = create<AppState>()(
               lastError: '',
               ...(host !== get().host ? { host, capabilities: capabilitiesFor(host) } : {}),
             });
-            // Single lifecycle decision point: no other code path may auto-start a session.
-            const action = decideSessionAction({
-              onboardingDone: get().onboardingDone,
-              autoStart: get().settings.autoStartCaptions,
-              engine: get().settings.captionEngine,
-              localActive: get().sessionActive,
-              starting: get().starting,
-              healthReachable: true,
-              healthSessionActive: health.session?.active === true,
-              sinceLastAttemptMs: Date.now() - lastAutoStartMs,
-            });
-            if (action === 'start') {
-              lastAutoStartMs = Date.now();
-              void get().start();
-            }
             return;
           } catch (error) {
             // First offline tick: ask the native shell to spawn the bundled/local bridge once.
@@ -592,6 +600,9 @@ export const useAppStore = create<AppState>()(
               break;
             case 'session_stopped':
               set({ sessionActive: false });
+              // The bridge stopped the session on its own (orphan reaper / remote stop). This is
+              // one of only two automatic restart triggers.
+              ensureSession('session-stopped');
               break;
             case 'error':
               set({ lastError: event.message });

@@ -1,39 +1,31 @@
 /**
- * Single source of truth for "should the app start / restart the bridge session?".
+ * Session lifecycle, event-driven only.
  *
- * Pure so the lifecycle rules can be tested without a webview, a bridge, or macOS permissions.
- * Everything that can trigger a start goes through `decideSessionAction` — there must be no other
- * place calling `start()` implicitly.
+ * There is exactly ONE automatic start trigger: a bridge event ("stream online" or
+ * "session stopped"). No polling timer, no React effect, no repeated health round trips. This is
+ * deliberately small so the behaviour can be pinned by tests and reasoned about in one glance.
  */
+
+export type SessionTrigger = 'stream-online' | 'session-stopped';
 
 export interface SessionSnapshot {
   /** Onboarding finished. */
   onboardingDone: boolean;
-  /** User wants the session warmed at launch and kept alive. */
   autoStart: boolean;
-  /** Selected caption source. */
   engine: 'system-live' | 'bridge-asr';
-  /** App's own view of whether a session is running. */
+  /** True only after OUR OWN successful start() call. Never inferred from replayed events. */
   localActive: boolean;
-  /** App is already inside a start() call. */
   starting: boolean;
-  /** What `/health` reports right now. */
-  healthReachable: boolean;
-  healthSessionActive: boolean;
-  /** Milliseconds since the previous automatic attempt. */
-  sinceLastAttemptMs: number;
 }
 
-export type SessionAction = 'start' | 'wait';
-
-export const RETRY_INTERVAL_MS = 15_000;
-
-export function decideSessionAction(s: SessionSnapshot): SessionAction {
-  if (!s.onboardingDone || !s.autoStart) return 'wait';
-  if (s.engine !== 'bridge-asr') return 'wait';
-  if (!s.healthReachable) return 'wait';
-  if (s.starting || s.localActive || s.healthSessionActive) return 'wait';
-  // Throttle, but never give up: the bridge's orphan reaper can stop the session at any time.
-  if (s.sinceLastAttemptMs < RETRY_INTERVAL_MS) return 'wait';
-  return 'start';
+/**
+ * True when the trigger should cause exactly one start attempt.
+ * We intentionally ignore the trigger's payload: /health inside ensureSession is the authority on
+ * whether a session already exists (replayed session_started frames are stale and must not count).
+ */
+export function shouldStartForTrigger(trigger: SessionTrigger, s: SessionSnapshot): boolean {
+  if (!s.onboardingDone || !s.autoStart) return false;
+  if (s.engine !== 'bridge-asr') return false;
+  if (s.starting || s.localActive) return false;
+  return trigger === 'stream-online' || trigger === 'session-stopped';
 }

@@ -2,7 +2,6 @@ import { useState, type ReactNode } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { translate } from '../i18n';
 import type { TranslationProvider } from '../translation/types';
-import type { Profile } from '../profiles/profiles';
 import { OS_LABEL } from '../platform/os';
 
 const FAMILIES = [
@@ -44,13 +43,6 @@ export function SettingsView() {
   const health = useAppStore((s) => s.health);
   const host = useAppStore((s) => s.host);
   const capabilities = useAppStore((s) => s.capabilities);
-  const profiles = useAppStore((s) => s.profiles);
-  const activeProfileId = useAppStore((s) => s.activeProfileId);
-  const autoProfile = useAppStore((s) => s.autoProfile);
-  const setAutoProfile = useAppStore((s) => s.setAutoProfile);
-  const applyProfile = useAppStore((s) => s.applyProfile);
-  const saveProfile = useAppStore((s) => s.saveProfile);
-  const deleteProfile = useAppStore((s) => s.deleteProfile);
   const vocabulary = useAppStore((s) => s.vocabulary);
   const addVocabulary = useAppStore((s) => s.addVocabulary);
   const updateVocabulary = useAppStore((s) => s.updateVocabulary);
@@ -81,17 +73,6 @@ export function SettingsView() {
             sẽ được thêm trong bridge/src/platform.rs.
           </div>
         )}
-        <label className="field narrow">
-          <span>{t('captionEngine')}</span>
-          <select
-            value={settings.captionEngine}
-            onChange={(e) => setSettings({ captionEngine: e.target.value as typeof settings.captionEngine })}
-          >
-            <option value="system-live">{t('systemLive')}</option>
-            <option value="bridge-asr">{t('bridgeAsr')}</option>
-          </select>
-          <small>{t('systemLive')} dùng text có sẵn của macOS — không tải model, không bật micro hay quyền Screen Recording.</small>
-        </label>
         <div className="field-grid">
           <label className="field">
             <span>{t('sourceLanguage')}</span>
@@ -243,41 +224,6 @@ export function SettingsView() {
             <option value="en">English</option>
           </select>
         </label>
-      </Section>
-
-      <Section title={t('frontmostProfiles')} subtitle={autoProfile ? t('profileAuto') : t('manual')}>
-        <Toggle checked={autoProfile} onChange={setAutoProfile} label={t('profileAuto')} />
-        <div className="profile-list">
-          {profiles.map((profile) => (
-            <div className={`profile-card ${profile.id === activeProfileId ? 'active' : ''}`} key={profile.id}>
-              <button className="profile-select" onClick={() => applyProfile(profile.id)}>
-                <strong>{profile.name}</strong>
-                <small>{profile.matchApps.join(', ') || 'fallback'} · {profile.language} → {profile.targetLanguage}</small>
-              </button>
-              {profile.id !== 'default' && (
-                <button className="button tiny ghost" onClick={() => deleteProfile(profile.id)}>{t('clear')}</button>
-              )}
-            </div>
-          ))}
-        </div>
-        <button
-          className="button ghost"
-          onClick={() => {
-            const profile: Profile = {
-              id: `profile-${Date.now()}`,
-              name: 'Họp Zoom',
-              matchApps: ['zoom'],
-              language: 'en',
-              family: 'apple-speech',
-              translationProvider: 'gemini',
-              targetLanguage: 'vi',
-              overlayEnabled: true,
-            };
-            saveProfile(profile);
-          }}
-        >
-          + Thêm profile
-        </button>
       </Section>
 
       <Section title={t('vocabulary')} subtitle="Tên riêng và thuật ngữ được thay thế trước khi dịch.">

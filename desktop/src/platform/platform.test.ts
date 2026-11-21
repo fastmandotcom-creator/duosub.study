@@ -13,7 +13,6 @@ describe('host capabilities', () => {
     expect(capabilitiesFor('macos').systemAudioCapture).toBe(true);
     expect(capabilitiesFor('windows').systemAudioCapture).toBe(true);
     expect(capabilitiesFor('linux').systemAudioCapture).toBe(false);
-    expect(capabilitiesFor('linux').frontmostApp).toBe(true); // profiles still work on Linux
     expect(capabilitiesFor('unknown').permissionPane).toBe(false);
   });
 

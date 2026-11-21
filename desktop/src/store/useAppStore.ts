@@ -2,16 +2,13 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import type { BridgeEvent, HealthResponse, StartResult } from '@duosub/caption-contract';
 import { BridgeClient, BridgeCallError, type BridgeConnectionState } from '../bridge/BridgeClient';
-import { newLines } from '../caption/systemCaptions';
 import {
-  appendSystemLine,
   applySegment,
   setTranslation,
   type CaptionRow,
   type TranslationState,
 } from '../caption/captionEngine';
 import { emitSafe, invokeSafe } from '../platform/tauri';
-import { DEFAULT_PROFILES, matchProfile, type Profile } from '../profiles/profiles';
 import { translate, type Locale } from '../i18n';
 import { capabilitiesFor, defaultFamilyFor, detectHostOS, type HostCapabilities, type HostOS } from '../platform/os';
 import { CloudTranslator, NoopTranslator } from '../translation/cloudTranslator';
@@ -38,8 +35,6 @@ export interface Settings {
   fontSize: number;
   /** Off by default: large saved transcripts were the main source of UI lag. */
   keepHistory: boolean;
-  /** Prefer the OS's own captions (no second ASR engine) on macOS. */
-  captionEngine: 'system-live' | 'bridge-asr';
   /** Include your own voice. Off by default: this system listens to the meeting/system audio. */
   includeMicrophone: boolean;
   /** Fall back to microphone-only when system audio is temporarily unavailable. Opt-in. */
@@ -52,7 +47,6 @@ export interface SessionRecord {
   endedAt: number;
   language: string;
   family: string;
-  profileId: string;
   rows: CaptionRow[];
 }
 
@@ -66,16 +60,11 @@ export interface AppState {
   health: HealthResponse | null;
   lastSeq: number;
   rows: CaptionRow[];
-  systemLines: string[];
   sessionId: string;
   sessionActive: boolean;
   starting: boolean;
   lastError: string;
   warnings: string[];
-  profiles: Profile[];
-  activeProfileId: string;
-  frontmostApp: string;
-  autoProfile: boolean;
   vocabulary: VocabularyEntry[];
   sessions: SessionRecord[];
   overlayVisible: boolean;
@@ -92,16 +81,10 @@ export interface AppState {
   stop: () => Promise<void>;
   selectFamily: (family: string) => Promise<void>;
   handleEvent: (event: BridgeEvent) => void;
-  pollSystemCaptions: () => Promise<void>;
   setTranslation: (id: string, text: string, state: TranslationState) => void;
   openPermissionSettings: () => Promise<void>;
   setOverlayVisible: (visible: boolean) => Promise<void>;
   toggleOverlay: () => Promise<void>;
-  setFrontmostApp: (app: string) => void;
-  setAutoProfile: (enabled: boolean) => void;
-  applyProfile: (id: string) => void;
-  saveProfile: (profile: Profile) => void;
-  deleteProfile: (id: string) => void;
   addVocabulary: (entry: Omit<VocabularyEntry, 'id'>) => void;
   updateVocabulary: (id: string, patch: Partial<VocabularyEntry>) => void;
   deleteVocabulary: (id: string) => void;
@@ -130,7 +113,6 @@ export const DEFAULT_SETTINGS: Settings = {
   includeSourceInExport: true,
   fontSize: 18,
   keepHistory: false,
-  captionEngine: 'bridge-asr',
   includeMicrophone: false,
   fallbackToMicrophone: false,
 };
@@ -144,14 +126,11 @@ const BASE_SETTINGS: Settings = {
   ...DEFAULT_SETTINGS,
   family: defaultFamilyFor(INITIAL_HOST),
   // Default: the bridge listens to the meeting/system audio. Microphone is opt-in.
-  captionEngine: 'bridge-asr',
 };
 
 let client = new BridgeClient(DEFAULT_SETTINGS.bridgeUrl, DEFAULT_SETTINGS.bridgeToken);
 let unsubscribeStream: (() => void) | null = null;
 let healthTimer: ReturnType<typeof setInterval> | null = null;
-let frontmostTimer: ReturnType<typeof setInterval> | null = null;
-let systemCaptionTimer: ReturnType<typeof setInterval> | null = null;
 let pipeline: TranslationPipeline | null = null;
 let currentTranslator: Translator | null = null;
 let bridgeSpawnAttempted = false;
@@ -210,19 +189,6 @@ export const useAppStore = create<AppState>()(
         });
       };
 
-      const startSystemPolling = () => {
-        if (systemCaptionTimer !== null) return;
-        // Ask macOS for the Accessibility grant immediately: the system dialog is the only way
-        // the user can approve it, and finding the hidden pane manually wasted a lot of time.
-        void invokeSafe('open_accessibility_settings');
-        systemCaptionTimer = setInterval(() => void get().pollSystemCaptions(), 500);
-        void get().pollSystemCaptions();
-      };
-      const stopSystemPolling = () => {
-        if (systemCaptionTimer !== null) clearInterval(systemCaptionTimer);
-        systemCaptionTimer = null;
-      };
-
       const reconfigurePipeline = () => {
         const state = get();
         currentTranslator = buildTranslator(state.settings);
@@ -246,16 +212,11 @@ export const useAppStore = create<AppState>()(
         health: null,
         lastSeq: 0,
         rows: [],
-        systemLines: [],
         sessionId: '',
         sessionActive: false,
         starting: false,
         lastError: '',
         warnings: [],
-        profiles: DEFAULT_PROFILES,
-        activeProfileId: 'default',
-        frontmostApp: '',
-        autoProfile: true,
         vocabulary: [],
         sessions: [],
         overlayVisible: false,
@@ -287,17 +248,9 @@ export const useAppStore = create<AppState>()(
           });
           reconfigurePipeline();
           restartStream();
-          if (get().settings.captionEngine === 'system-live') startSystemPolling();
           void get().refreshHealth();
           // SSE onopen already flips the pill to online; health only needs a slow safety poll.
           healthTimer = setInterval(() => void get().refreshHealth(), 10_000);
-          frontmostTimer = setInterval(async () => {
-            const name = await invokeSafe<string>('get_frontmost_app');
-            if (typeof name === 'string' && name !== '' && name !== get().frontmostApp) {
-              get().setFrontmostApp(name);
-            }
-          }, 5000);
-
           // Mirrored from the native side: tray / hotkeys ask the webview to change state.
           void import('../platform/tauri').then(({ listenSafe }) => {
             void listenSafe< string>('duosub:toggle-overlay', () => void get().toggleOverlay());
@@ -337,15 +290,6 @@ export const useAppStore = create<AppState>()(
             patch.models !== undefined
           ) {
             reconfigurePipeline();
-          }
-          if (patch.captionEngine !== undefined) {
-            stopSystemPolling();
-            if (patch.captionEngine === 'system-live') {
-              set({ rows: [], systemLines: [], sessionId: '', sessionActive: false });
-              startSystemPolling();
-            } else {
-              set({ systemLines: [] });
-            }
           }
           if (patch.autostart !== undefined) {
             void invokeSafe('set_autostart', { enabled: patch.autostart });
@@ -503,7 +447,6 @@ export const useAppStore = create<AppState>()(
               endedAt: Date.now(),
               language: state.settings.language,
               family: state.settings.family,
-              profileId: state.activeProfileId,
               rows: state.rows.slice(-40),
             };
             set({ sessions: [record, ...state.sessions].slice(0, 3) });
@@ -532,25 +475,6 @@ export const useAppStore = create<AppState>()(
           } catch (error) {
             set({ lastError: error instanceof Error ? error.message : String(error) });
           }
-        },
-
-        pollSystemCaptions: async () => {
-          if (get().settings.captionEngine !== 'system-live') return;
-          const lines = await invokeSafe<string[]>('read_system_captions');
-          if (lines === null) return;
-          const fresh = newLines(get().systemLines, lines);
-          if (fresh.length === 0) return;
-          let rows = get().rows;
-          let seq = get().lastSeq;
-          const now = Date.now();
-          const translateEnabled = get().settings.translationProvider !== 'none';
-          for (const line of fresh) {
-            seq += 1;
-            rows = appendSystemLine(rows, line, seq, now);
-            if (translateEnabled) pipeline?.schedule(rows[rows.length - 1]);
-          }
-          set({ systemLines: lines, rows, lastSeq: seq, lastError: '', connection: 'online' });
-          emitCaption();
         },
 
         handleEvent: (event) => {
@@ -613,43 +537,6 @@ export const useAppStore = create<AppState>()(
           await get().setOverlayVisible(!get().overlayVisible);
         },
 
-        setFrontmostApp: (app) => {
-          set({ frontmostApp: app });
-          if (!get().autoProfile) return;
-          const match = matchProfile(get().profiles, app);
-          if (match !== null && match.id !== get().activeProfileId) get().applyProfile(match.id);
-        },
-
-        setAutoProfile: (enabled) => set({ autoProfile: enabled }),
-
-        applyProfile: (profileId) => {
-          const profile = get().profiles.find((item) => item.id === profileId);
-          if (profile === undefined) return;
-          set({ activeProfileId: profileId });
-          get().setSettings({
-            language: profile.language,
-            family: profile.family,
-            translationProvider: profile.translationProvider,
-            targetLanguage: profile.targetLanguage,
-            overlayEnabled: profile.overlayEnabled,
-          });
-        },
-
-        saveProfile: (profile) => {
-          const profiles = get().profiles;
-          const index = profiles.findIndex((item) => item.id === profile.id);
-          const next = index === -1 ? [...profiles, profile] : profiles.map((p) => (p.id === profile.id ? profile : p));
-          set({ profiles: next });
-        },
-
-        deleteProfile: (profileId) => {
-          if (profileId === 'default') return;
-          set({
-            profiles: get().profiles.filter((p) => p.id !== profileId),
-            activeProfileId: get().activeProfileId === profileId ? 'default' : get().activeProfileId,
-          });
-        },
-
         addVocabulary: (entry) => {
           set({ vocabulary: [...get().vocabulary, { ...entry, id: id() }] });
         },
@@ -691,9 +578,6 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         settings: state.settings,
         onboardingDone: state.onboardingDone,
-        profiles: state.profiles,
-        activeProfileId: state.activeProfileId,
-        autoProfile: state.autoProfile,
         vocabulary: state.vocabulary,
         sessions: state.sessions,
       }),
@@ -706,8 +590,7 @@ export const useAppStore = create<AppState>()(
             ...BASE_SETTINGS,
             ...saved.settings,
             // Old persisted experiments must not silently change the caption engine or startup.
-            captionEngine: 'bridge-asr',
-            includeMicrophone: saved.settings?.includeMicrophone ?? false,
+                      includeMicrophone: saved.settings?.includeMicrophone ?? false,
             // No API key persisted → never silently attempt a cloud translation.
             translationProvider: resolveTranslationProvider(
               saved.settings?.translationProvider,
@@ -730,15 +613,11 @@ export function bootstrapApp(): void {
 /** Stops every background loop. Used in tests and when the webview is torn down. */
 export function disposeApp(): void {
   if (healthTimer !== null) clearInterval(healthTimer);
-  if (frontmostTimer !== null) clearInterval(frontmostTimer);
   unsubscribeStream?.();
   unsubscribeStream = null;
   if (leaseTimer !== null) clearInterval(leaseTimer);
   leaseTimer = null;
-  if (systemCaptionTimer !== null) clearInterval(systemCaptionTimer);
-  systemCaptionTimer = null;
   pipeline?.cancelAll();
   void client.releaseOwner();
   healthTimer = null;
-  frontmostTimer = null;
 }

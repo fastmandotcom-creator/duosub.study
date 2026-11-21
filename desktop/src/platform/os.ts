@@ -13,8 +13,6 @@ export interface HostCapabilities {
   /** Always-on-top frameless caption window. */
   overlay: boolean;
   autostart: boolean;
-  /** Reading the frontmost application name for per-app profiles. */
-  frontmostApp: boolean;
   /** Native system-audio permission pane that the bridge can open. */
   permissionPane: boolean;
 }
@@ -25,7 +23,6 @@ const CAPABILITIES: Record<HostOS, HostCapabilities> = {
     appleSpeech: true,
     overlay: true,
     autostart: true,
-    frontmostApp: true,
     permissionPane: true,
   },
   windows: {
@@ -33,7 +30,6 @@ const CAPABILITIES: Record<HostOS, HostCapabilities> = {
     appleSpeech: false,
     overlay: true,
     autostart: true,
-    frontmostApp: true,
     permissionPane: false,
   },
   linux: {
@@ -41,7 +37,6 @@ const CAPABILITIES: Record<HostOS, HostCapabilities> = {
     appleSpeech: false,
     overlay: true,
     autostart: true,
-    frontmostApp: true, // xdotool/wmctrl
     permissionPane: false,
   },
   unknown: {
@@ -49,7 +44,6 @@ const CAPABILITIES: Record<HostOS, HostCapabilities> = {
     appleSpeech: false,
     overlay: false,
     autostart: false,
-    frontmostApp: false,
     permissionPane: false,
   },
 };

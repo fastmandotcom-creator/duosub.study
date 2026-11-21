@@ -4,13 +4,12 @@ import { translate } from '../i18n';
 import { StatusPill } from '../components/StatusPill';
 import { formatTimestamp } from '../history/export';
 import { installHintFor } from '../bridge/install';
-import { invokeSafe, writeTextToClipboard } from '../platform/tauri';
+import { writeTextToClipboard } from '../platform/tauri';
 
 export function LiveView() {
   const rows = useAppStore((s) => s.rows);
   const sessionActive = useAppStore((s) => s.sessionActive);
   const starting = useAppStore((s) => s.starting);
-  const captionEngine = useAppStore((s) => s.settings.captionEngine);
   const connection = useAppStore((s) => s.connection);
   const health = useAppStore((s) => s.health);
   const lastError = useAppStore((s) => s.lastError);
@@ -43,7 +42,7 @@ export function LiveView() {
         <div>
           <h1>{t('tabLive')}</h1>
           <p className="muted">
-            {captionEngine === 'system-live' ? t('systemLive') : (health?.model_id ?? t('bridgeMissing'))}
+            {health?.model_id ?? t('bridgeMissing')}
           </p>
         </div>
         <div className="header-actions">
@@ -54,43 +53,21 @@ export function LiveView() {
           <button className="button ghost" onClick={() => void copyTranscript()} disabled={rows.length === 0}>
             {t('copyTranscript')}
           </button>
-          {captionEngine === 'system-live' ? (
-            <span className="status-pill status-live">
-              <span className="status-dot" />
-              {t('systemLive')}
-            </span>
-          ) : (
-            <button
-              className={`button ${sessionActive ? 'danger' : 'primary'}`}
-              disabled={starting}
-              onClick={() => void (sessionActive ? stop() : start())}
-            >
-              {starting
-                ? t('startingCaptions')
-                : sessionActive
-                  ? `■ ${t('stop')}`
-                  : `▶ ${t('start')}`}
-            </button>
-          )}
+          <button
+            className={`button ${sessionActive ? 'danger' : 'primary'}`}
+            disabled={starting}
+            onClick={() => void (sessionActive ? stop() : start())}
+          >
+            {starting
+              ? t('startingCaptions')
+              : sessionActive
+                ? `■ ${t('stop')}`
+                : `▶ ${t('start')}`}
+          </button>
         </div>
       </header>
 
-      {captionEngine === 'system-live' && rows.length === 0 && (
-        <div className="alert warning">
-          <div>
-            <strong>{t('axPermissionNeeded')}</strong>
-            <p>{t('axPermissionHint')}</p>
-          </div>
-          <button
-            className="button primary"
-            onClick={() => void invokeSafe('open_accessibility_settings')}
-          >
-            {t('openAccessibility')}
-          </button>
-        </div>
-      )}
-
-      {connection === 'offline' && captionEngine === 'bridge-asr' && (
+      {connection === 'offline' && (
         <div className="alert warning">
           <div>
             <strong>{t('bridgeMissing')}</strong>
@@ -110,7 +87,7 @@ export function LiveView() {
         </div>
       )}
 
-      {permissionDenied && captionEngine === 'bridge-asr' && (
+      {permissionDenied && (
         <div className="alert warning">
           <div>
             <strong>{t('permissionNeeded')}</strong>

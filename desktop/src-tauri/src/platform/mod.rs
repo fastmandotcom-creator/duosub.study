@@ -1,13 +1,6 @@
 //! OS-neutral host layer. Everything platform-specific in the desktop shell lives here so adding
 //! Windows/Linux support never touches the store, the views, or the bridge HTTP client.
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(target_os = "windows")]
-mod windows;
-
 use std::path::PathBuf;
 
 use tauri::Manager;
@@ -51,41 +44,6 @@ pub fn default_family() -> &'static str {
     } else {
         "whisper-medium"
     }
-}
-
-/// Name of the frontmost application, used by per-app profiles. Empty = unavailable.
-pub fn frontmost_app() -> String {
-    #[cfg(target_os = "macos")]
-    return macos::frontmost_app();
-    #[cfg(target_os = "windows")]
-    return windows::frontmost_app();
-    #[cfg(target_os = "linux")]
-    return linux::frontmost_app();
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    return String::new();
-}
-
-/// Current lines from macOS Live Captions, newest last. Empty on other hosts or when the feature
-/// is off. Reading the system's own transcript avoids running a second ASR engine entirely.
-pub fn read_system_captions() -> Vec<String> {
-    #[cfg(target_os = "macos")]
-    return macos::read_system_captions();
-    #[cfg(not(target_os = "macos"))]
-    return Vec::new();
-}
-
-pub fn request_accessibility_permission() {
-    #[cfg(target_os = "macos")]
-    macos::ensure_accessibility_permission(true);
-    #[cfg(not(target_os = "macos"))]
-    {}
-}
-
-pub fn accessibility_status() -> bool {
-    #[cfg(target_os = "macos")]
-    return macos::ensure_accessibility_permission(false);
-    #[cfg(not(target_os = "macos"))]
-    return true;
 }
 
 /// Candidate paths for a locally installed bridge binary. Pure so it is testable on any host.
@@ -155,71 +113,6 @@ fn system_candidates() -> Vec<PathBuf> {
     Vec::new()
 }
 
-/// Extracts a JSON string field with a tiny scanner — enough for the CLI JSON emitted by Hyprland
-/// and Niri without pulling a JSON crate into the native shell for one field.
-/// Linux-only at runtime; kept here so its parser is testable on every host.
-#[allow(dead_code)]
-pub fn parse_json_string_field(json: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{key}\"");
-    let start = json.find(&needle)? + needle.len();
-    let rest = &json[start..];
-    let colon = rest.find(':')?;
-    let rest = rest[colon + 1..].trim_start();
-    if !rest.starts_with('"') {
-        return None;
-    }
-    let bytes = rest.as_bytes();
-    let mut value = String::new();
-    let mut segment_start = 1;
-    let mut i = 1;
-    while i < bytes.len() {
-        match bytes[i] {
-            // Both '"' and '\\' are ASCII, so these byte offsets are always char boundaries.
-            b'\\' if i + 1 < bytes.len() => {
-                value.push_str(&rest[segment_start..i]);
-                i += 1;
-                match bytes[i] {
-                    b'n' => value.push('\n'),
-                    b't' => value.push('\t'),
-                    b'r' => value.push('\r'),
-                    other => value.push(other as char),
-                }
-                i += 1;
-                segment_start = i;
-            }
-            b'"' => {
-                value.push_str(&rest[segment_start..i]);
-                return if value.is_empty() { None } else { Some(value) };
-            }
-            _ => i += 1,
-        }
-    }
-    None
-}
-
-/// Best-effort Sway/i3 tree scan: the focused container's `name` is the nearest preceding one.
-/// Wayland has no portable "frontmost app" API, so this is deliberately a fallback, not a promise.
-#[allow(dead_code)]
-pub fn focused_name_from_tree(json: &str) -> Option<String> {
-    let focus = json.find("\"focused\":true")?;
-    let prefix = &json[..focus];
-    let key = "\"name\"";
-    let start = prefix.rfind(key)? + key.len();
-    let rest = &prefix[start..];
-    let colon = rest.find(':')?;
-    let rest = rest[colon + 1..].trim_start();
-    if !rest.starts_with('"') {
-        return None;
-    }
-    let end = rest[1..].find('"')?;
-    let name = &rest[1..1 + end];
-    if name.is_empty() {
-        None
-    } else {
-        Some(name.to_owned())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,33 +138,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parses_cli_json_window_titles() {
-        assert_eq!(
-            parse_json_string_field(r#"{"title":"Zoom — Weekly","id":1}"#, "title").as_deref(),
-            Some("Zoom — Weekly")
-        );
-        assert_eq!(
-            parse_json_string_field(r#"{"title":"a\"b"}"#, "title").as_deref(),
-            Some("a\"b")
-        );
-        assert_eq!(parse_json_string_field(r#"{"title":42}"#, "title"), None);
-        assert_eq!(parse_json_string_field("{}", "title"), None);
-    }
 
-    #[test]
-    fn extracts_the_focused_container_name_from_a_sway_tree() {
-        let tree =
-            r#"{"name":"Terminal","focused":false}, {"name":"Google Chrome","focused":true}"#;
-        assert_eq!(
-            focused_name_from_tree(tree).as_deref(),
-            Some("Google Chrome")
-        );
-        assert_eq!(
-            focused_name_from_tree(r#"{"name":"A","focused":false}"#),
-            None
-        );
-    }
+
+
 
     #[test]
     fn app_data_binary_has_the_right_extension_for_the_host() {

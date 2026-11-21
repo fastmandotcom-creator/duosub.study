@@ -3,29 +3,6 @@ use tauri_plugin_autostart::ManagerExt;
 
 use crate::{hotkeys, platform};
 
-/// Frontmost app name, used by the "profile follows the active app" feature. The OS-specific
-/// implementation lives in `platform/`; unsupported hosts return an empty string (manual profiles).
-#[tauri::command]
-pub fn get_frontmost_app() -> String {
-    platform::frontmost_app()
-}
-
-/// Snapshot of macOS Live Captions text. Polled from the frontend in system-live mode.
-#[tauri::command]
-pub fn read_system_captions() -> Vec<String> {
-    platform::read_system_captions()
-}
-
-#[tauri::command]
-pub fn open_accessibility_settings() {
-    platform::request_accessibility_permission();
-}
-
-#[tauri::command]
-pub fn accessibility_status() -> bool {
-    platform::accessibility_status()
-}
-
 #[tauri::command]
 pub fn host_info() -> serde_json::Value {
     serde_json::json!({

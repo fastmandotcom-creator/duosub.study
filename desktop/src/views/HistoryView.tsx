@@ -99,7 +99,7 @@ export function HistoryView() {
               <div className="section-head row-between">
                 <div>
                   <h2>{new Date(session.startedAt).toLocaleString()} · {session.language}</h2>
-                  <p className="muted">{session.family} · {session.rows.length} utterances · {session.profileId}</p>
+                  <p className="muted">{session.family} · {session.rows.length} utterances</p>
                 </div>
                 <div className="header-actions">
                   <ExportButtons rows={matchingRows} locale={locale} />

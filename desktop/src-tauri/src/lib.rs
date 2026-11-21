@@ -92,10 +92,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::get_frontmost_app,
-            commands::read_system_captions,
-            commands::open_accessibility_settings,
-            commands::accessibility_status,
             commands::host_info,
             commands::show_overlay,
             commands::set_autostart,

@@ -8,8 +8,6 @@ import { writeTextToClipboard } from '../platform/tauri';
 export function DiagnosticsView() {
   const health = useAppStore((s) => s.health);
   const connection = useAppStore((s) => s.connection);
-  const frontmostApp = useAppStore((s) => s.frontmostApp);
-  const activeProfileId = useAppStore((s) => s.activeProfileId);
   const rows = useAppStore((s) => s.rows);
   const lastError = useAppStore((s) => s.lastError);
   const settings = useAppStore((s) => s.settings);
@@ -22,13 +20,10 @@ export function DiagnosticsView() {
     health,
     bridgeUrl: settings.bridgeUrl,
     connection,
-    frontmostApp,
-    profileId: activeProfileId,
     appVersion: version,
     rowsInMemory: rows.length,
     lastError,
     host,
-    captionEngine: settings.captionEngine,
   });
 
   return (

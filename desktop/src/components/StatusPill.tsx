@@ -5,8 +5,6 @@ export function StatusPill({ compact = false }: { compact?: boolean }) {
   const connection = useAppStore((s) => s.connection);
   const sessionActive = useAppStore((s) => s.sessionActive);
   const starting = useAppStore((s) => s.starting);
-  const captionEngine = useAppStore((s) => s.settings.captionEngine);
-  const rowCount = useAppStore((s) => s.rows.length);
   const health = useAppStore((s) => s.health);
   const locale = useAppStore((s) => s.settings.locale);
 
@@ -15,7 +13,7 @@ export function StatusPill({ compact = false }: { compact?: boolean }) {
   const bridgeSessionActive = health?.session?.active === true;
   const state = starting
     ? 'starting'
-    : (captionEngine === 'system-live' && rowCount > 0) || (sessionActive && bridgeSessionActive)
+    : sessionActive && bridgeSessionActive
       ? 'live'
       : connection === 'online' && bridgeSessionActive
         ? 'live'

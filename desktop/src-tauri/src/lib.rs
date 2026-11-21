@@ -23,7 +23,7 @@ pub fn run() {
         })
         .build();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -66,7 +66,10 @@ pub fn run() {
                     "copy" => {
                         let _ = app.emit("duosub:copy-transcript", ());
                     }
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        bridge::stop_session_before_exit();
+                        app.exit(0);
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -101,6 +104,14 @@ pub fn run() {
             commands::app_version,
             commands::bridge_request,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running DuoSub Desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building DuoSub Desktop");
+
+    // Handle quit from every path (tray Quit, Cmd+Q, dock Quit, OS logout). Stop the bridge
+    // session BEFORE the process ends so no microphone/system capture survives the app.
+    app.run(|_app, event| {
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            bridge::stop_session_before_exit();
+        }
+    });
 }

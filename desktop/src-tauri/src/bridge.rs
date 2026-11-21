@@ -4,6 +4,25 @@ use tauri::AppHandle;
 
 use crate::platform;
 
+/// Stop the live bridge session synchronously before the app exits. Without this the bridge keeps
+/// capturing microphone + system audio after the app is gone, until its 3-minute orphan reaper.
+pub fn stop_session_before_exit() {
+    let base = std::env::var("DUOSUB_BRIDGE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:4499".to_owned());
+    let url = format!("{}/sessions/stop", base.trim_end_matches('/'));
+    // A tiny reqwest client keeps this call independent of the webview (which may already be
+    // tearing down). Cap it at 3s so quitting never feels hung.
+    if let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+    {
+        if let Ok(response) = client.post(&url).send() {
+            let status = response.status();
+            eprintln!("duosub-desktop: stop session on exit → HTTP {status}");
+        }
+    }
+}
+
 #[tauri::command]
 pub fn start_bridge(app: AppHandle) -> Result<String, String> {
     for path in platform::bridge_candidates(&app) {

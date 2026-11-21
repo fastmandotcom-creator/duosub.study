@@ -60,6 +60,8 @@ export interface AppState {
   health: HealthResponse | null;
   lastSeq: number;
   rows: CaptionRow[];
+  /** Live in-progress utterance — UI-only, never persisted, replaced on each partial. */
+  interimText: string;
   sessionId: string;
   sessionActive: boolean;
   starting: boolean;
@@ -179,7 +181,7 @@ export const useAppStore = create<AppState>()(
         client = new BridgeClient(state.settings.bridgeUrl, state.settings.bridgeToken);
         // A fresh viewer must not replay the bridge's ring: that floods stale captions into the
         // queue and the browser's storage. Start at the newest seq instead.
-        set({ lastSeq: 0, rows: [] });
+        set({ lastSeq: 0, rows: [], interimText: '' });
         unsubscribeStream = client.subscribe({
           onEvent: (event) => get().handleEvent(event),
           onState: (connection) => set({ connection }),
@@ -188,7 +190,7 @@ export const useAppStore = create<AppState>()(
           onReset: () => {
             // New bridge process: its seq starts at 0 and the old utterances no longer exist.
             pipeline?.cancelAll();
-            set({ lastSeq: 0, rows: [], sessionId: '', sessionActive: false, warnings: [] });
+            set({ lastSeq: 0, rows: [], interimText: '', sessionId: '', sessionActive: false, warnings: [] });
           },
         });
       };
@@ -216,6 +218,7 @@ export const useAppStore = create<AppState>()(
         health: null,
         lastSeq: 0,
         rows: [],
+        interimText: '',
         sessionId: '',
         sessionActive: false,
         starting: false,
@@ -413,6 +416,7 @@ export const useAppStore = create<AppState>()(
             }
             set({
               rows: [],
+              interimText: '',
               sessionId: result.sessionId,
               sessionActive: true,
               lastSeq: 0,
@@ -487,10 +491,21 @@ export const useAppStore = create<AppState>()(
           switch (event.kind) {
             case 'segment': {
               const state = get();
-              const rows = applySegment(state.rows, event, event.seq, (text) =>
-                applyVocabulary(text, state.vocabulary),
-              );
-              set({ rows });
+              const text = applyVocabulary(event.text, state.vocabulary);
+              if (event.final !== true) {
+                // Partial revisions of the same utterance are a UI concern only. Keep ONE live
+                // string instead of writing every revision into the caption list / storage.
+                set({ interimText: text });
+                void emitSafe('duosub:caption', {
+                  rows: [{ translatedText: text, sourceText: text, final: false }],
+                  visible: state.overlayVisible,
+                  showSource: state.settings.showSource,
+                  fontSize: state.settings.fontSize,
+                });
+                break;
+              }
+              const rows = applySegment(state.rows, event, event.seq, () => text);
+              set({ rows, interimText: '' });
               const changed = rows.find((row) => row.seq === event.seq);
               if (changed !== undefined) {
                 if (state.settings.translationProvider !== 'none') pipeline?.schedule(changed);
@@ -555,7 +570,7 @@ export const useAppStore = create<AppState>()(
 
         clearSession: () => {
           pipeline?.cancelAll();
-          set({ rows: [], sessionId: '', sessionActive: false });
+          set({ rows: [], interimText: '', sessionId: '', sessionActive: false });
           void get().setOverlayVisible(false);
         },
 

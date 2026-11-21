@@ -10,6 +10,7 @@ export function LiveView() {
   const rows = useAppStore((s) => s.rows);
   const sessionActive = useAppStore((s) => s.sessionActive);
   const starting = useAppStore((s) => s.starting);
+  const interimText = useAppStore((s) => s.interimText);
   const connection = useAppStore((s) => s.connection);
   const health = useAppStore((s) => s.health);
   const lastError = useAppStore((s) => s.lastError);
@@ -108,7 +109,13 @@ export function LiveView() {
       ))}
 
       <div className="caption-list" ref={listRef}>
-        {visible.length === 0 ? (
+        {interimText !== '' && (
+          <article className="caption-row interim">
+            <div className="caption-meta"><span className="badge live">partial</span></div>
+            <div className="caption-source">{interimText}</div>
+          </article>
+        )}
+        {visible.length === 0 && interimText === '' ? (
           <div className="empty-state">
             <div className="empty-icon">◉</div>
             <h2>{t('captionEmpty')}</h2>

@@ -373,6 +373,20 @@ export const useAppStore = create<AppState>()(
               lastError: '',
               ...(host !== get().host ? { host, capabilities: capabilitiesFor(host) } : {}),
             });
+            // Self-heal: the bridge's orphan reaper or a bridge restart can stop the session
+            // while the app is open. Re-arm it automatically instead of leaving a dead UI.
+            if (
+              get().settings.autoStartCaptions &&
+              get().settings.captionEngine === 'bridge-asr' &&
+              get().onboardingDone &&
+              !get().sessionActive &&
+              !get().starting &&
+              health.session?.active !== true &&
+              autoRetryCount < 6
+            ) {
+              autoRetryCount += 1;
+              void get().start();
+            }
             return;
           } catch (error) {
             // First offline tick: ask the native shell to spawn the bundled/local bridge once.

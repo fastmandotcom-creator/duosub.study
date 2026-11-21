@@ -137,7 +137,6 @@ let pipeline: TranslationPipeline | null = null;
 let currentTranslator: Translator | null = null;
 let bridgeSpawnAttempted = false;
 let leaseTimer: ReturnType<typeof setInterval> | null = null;
-let autoStartAttempted = false;
 let autoRetryCount = 0;
 
 function buildTranslator(settings: Settings): Translator | null {
@@ -233,7 +232,6 @@ export const useAppStore = create<AppState>()(
 
         init: () => {
           if (pipeline !== null) return;
-          autoStartAttempted = false;
           // Bound persisted data even if the user enabled history at some point in the past.
           set({
             sessions: get().settings.keepHistory
@@ -254,13 +252,7 @@ export const useAppStore = create<AppState>()(
           });
           reconfigurePipeline();
           restartStream();
-          // Warm the ASR session once per launch. Do NOT gate this on the health fetch: the SSE
-          // connection can come up first, and waiting for a second HTTP round trip is exactly the
-          // delay users notice at startup.
-          if (get().onboardingDone && get().settings.autoStartCaptions && !autoStartAttempted) {
-            autoStartAttempted = true;
-            void get().start();
-          }
+          // Auto-warm is driven by App's effect: it must run AFTER persist rehydration.
           void get().refreshHealth();
           // SSE onopen already flips the pill to online; health only needs a slow safety poll.
           healthTimer = setInterval(() => void get().refreshHealth(), 10_000);

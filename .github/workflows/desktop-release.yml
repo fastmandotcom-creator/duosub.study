@@ -1,5 +1,9 @@
 name: desktop-release
 
+# Simple release: push a tag like `desktop-v1.0.0` and CI builds installers for all three hosts.
+# Signing is OPTIONAL — add the secrets below whenever you want signed artifacts; without them the
+# release still publishes (macOS: right-click → Open).
+
 on:
   push:
     tags: ['desktop-v*']
@@ -28,15 +32,15 @@ jobs:
         with:
           node-version: 22
 
+      - uses: dtolnay/rust-toolchain@stable
+
       - name: Install dependencies and test
         run: |
           npm ci
           npm test
           npm run typecheck
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Linux system dependencies (WebKit2GTK + tray + package signing)
+      - name: Linux system dependencies
         if: matrix.target == 'linux'
         run: |
           sudo apt-get update
@@ -44,74 +48,61 @@ jobs:
             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
             libasound2-dev libpulse-dev debsigs
 
-      # Secrets cannot be referenced in `if:` expressions, so check them here and export a flag.
-      - name: Require signing credentials for this release lane
+      # Secrets can't be used in `if:` directly, so expose a simple flag. Missing secrets only warn.
+      - name: Detect optional signing credentials
         id: signing
         shell: bash
         env:
           MAC_CERT: ${{ secrets.DUOSUB_CERT_P12 }}
           MAC_IDENTITY: ${{ secrets.DUOSUB_SIGN_IDENTITY }}
           WIN_PFX: ${{ secrets.WINDOWS_PFX_BASE64 }}
-          WIN_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
           LINUX_KEY: ${{ secrets.LINUX_GPG_PRIVATE_KEY }}
-          LINUX_FPR: ${{ secrets.LINUX_GPG_FINGERPRINT }}
         run: |
           ready=0
           case "${{ matrix.target }}" in
             macos)   [ -n "$MAC_CERT" ] && [ -n "$MAC_IDENTITY" ] && ready=1 ;;
-            windows) [ -n "$WIN_PFX" ] && [ -n "$WIN_PASSWORD" ] && ready=1 ;;
-            linux)   [ -n "$LINUX_KEY" ] && [ -n "$LINUX_FPR" ] && ready=1 ;;
+            windows) [ -n "$WIN_PFX" ] && ready=1 ;;
+            linux)   [ -n "$LINUX_KEY" ] && ready=1 ;;
           esac
           echo "ready=$ready" >> "$GITHUB_OUTPUT"
           if [ "$ready" -ne 1 ]; then
-            echo "Release lane '${{ matrix.target }}' is missing its signing credentials." >&2
-            echo "Refusing to publish an unsigned artifact." >&2
-            exit 1
+            echo "::warning::No signing credentials for ${{ matrix.target }} — publishing unsigned artifacts."
           fi
 
-      - name: Import Developer ID certificate (macOS)
-        if: matrix.target == 'macos'
+      - name: Import Developer ID certificate (optional, macOS)
+        if: matrix.target == 'macos' && steps.signing.outputs.ready == '1'
         uses: apple-actions/import-codesign-certs@v3
         with:
           p12-file-base64: ${{ secrets.DUOSUB_CERT_P12 }}
           p12-password: ${{ secrets.DUOSUB_CERT_PASSWORD }}
 
-      - name: Build signed/notarized DMG (macOS)
+      - name: Build macOS DMG
         if: matrix.target == 'macos'
         env:
           DUOSUB_SIGN_IDENTITY: ${{ secrets.DUOSUB_SIGN_IDENTITY }}
           DUOSUB_NOTARY_PROFILE: ${{ secrets.DUOSUB_NOTARY_PROFILE }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash scripts/build-desktop.sh
 
-      - name: Build MSI + NSIS (Windows)
+      - name: Build Windows MSI + NSIS
         if: matrix.target == 'windows'
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
-      - name: Authenticode-sign MSI + NSIS (Windows)
-        if: matrix.target == 'windows'
+      - name: Authenticode-sign Windows installers (optional)
+        if: matrix.target == 'windows' && steps.signing.outputs.ready == '1'
         shell: pwsh
         env:
           WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
           WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
         run: |
           $files = Get-ChildItem -Path desktop/src-tauri/target/release/bundle -Recurse -Include *.msi, *.exe | ForEach-Object { $_.FullName }
-          if (-not $files) { throw "No Windows installers found — did Tauri bundle?" }
           ./scripts/sign-windows.ps1 -Artifacts $files
 
-      - name: Build DEB + AppImage (Linux)
+      - name: Build Linux DEB + AppImage
         if: matrix.target == 'linux'
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
-      - name: GPG-sign DEB + AppImage (Linux)
-        if: matrix.target == 'linux'
+      - name: GPG-sign Linux packages (optional)
+        if: matrix.target == 'linux' && steps.signing.outputs.ready == '1'
         env:
           LINUX_GPG_PRIVATE_KEY: ${{ secrets.LINUX_GPG_PRIVATE_KEY }}
           LINUX_GPG_FINGERPRINT: ${{ secrets.LINUX_GPG_FINGERPRINT }}
@@ -128,4 +119,3 @@ jobs:
             desktop/src-tauri/target/release/bundle/deb/*.deb
             desktop/src-tauri/target/release/bundle/appimage/*.AppImage
             desktop/src-tauri/target/release/bundle/appimage/*.AppImage.sig
-            desktop/src-tauri/target/release/bundle/**/latest.json

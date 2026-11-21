@@ -45,6 +45,13 @@ describe('session lifecycle', () => {
     }
   });
 
+  it('re-arms even when a replayed session_started event lies about an old session', () => {
+    // The bridge ring replays session_started for a session that has since stopped. The app must
+    // rely on /health (not the replay) and therefore still decide to start.
+    const replayedStart = { ...base, healthSessionActive: false };
+    expect(decideSessionAction(replayedStart)).toBe('start');
+  });
+
   it('re-arms after the bridge orphan-reaper stops a previously active session', () => {
     expect(decideSessionAction({ ...base, localActive: true })).toBe('wait');
     // Simulate the stopped event arriving and the bridge now reporting no session.

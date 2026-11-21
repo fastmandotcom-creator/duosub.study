@@ -586,7 +586,9 @@ export const useAppStore = create<AppState>()(
               break;
             }
             case 'session_started':
-              set({ sessionId: event.session_id, sessionActive: true, rows: [] });
+              // NEVER trust replayed session_started frames from the bridge's ring: they describe
+              // OLD sessions and would make a stopped session look alive, disabling auto-recovery.
+              // Only our own successful start() call sets sessionActive=true.
               break;
             case 'session_stopped':
               set({ sessionActive: false });

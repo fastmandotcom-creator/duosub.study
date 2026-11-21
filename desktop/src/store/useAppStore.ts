@@ -41,6 +41,10 @@ export interface Settings {
   keepHistory: boolean;
   /** Prefer the OS's own captions (no second ASR engine) on macOS. */
   captionEngine: 'system-live' | 'bridge-asr';
+  /** Include your own voice. Off by default: this system listens to the meeting/system audio. */
+  includeMicrophone: boolean;
+  /** Fall back to microphone-only when system audio is temporarily unavailable. Opt-in. */
+  fallbackToMicrophone: boolean;
 }
 
 export interface SessionRecord {
@@ -126,7 +130,9 @@ export const DEFAULT_SETTINGS: Settings = {
   fontSize: 18,
   autoStartCaptions: true,
   keepHistory: false,
-  captionEngine: 'system-live',
+  captionEngine: 'bridge-asr',
+  includeMicrophone: false,
+  fallbackToMicrophone: false,
 };
 
 const APP_VERSION = '1.0.0';
@@ -137,7 +143,8 @@ const INITIAL_HOST = detectHostOS(null, typeof navigator === 'undefined' ? '' : 
 const BASE_SETTINGS: Settings = {
   ...DEFAULT_SETTINGS,
   family: defaultFamilyFor(INITIAL_HOST),
-  captionEngine: INITIAL_HOST === 'macos' ? 'system-live' : 'bridge-asr',
+  // Default: the bridge listens to the meeting/system audio. Microphone is opt-in.
+  captionEngine: 'bridge-asr',
 };
 
 let client = new BridgeClient(DEFAULT_SETTINGS.bridgeUrl, DEFAULT_SETTINGS.bridgeToken);
@@ -419,18 +426,24 @@ export const useAppStore = create<AppState>()(
               set({ warnings: [translate(state.settings.locale, 'familyAutoRouted')] });
             }
 
+            // Default = system audio only. The microphone is never included unless the user opts
+            // in. An empty sources list means "everything available" on the bridge, so pin it.
+            const requestedSources: string[] = [];
+            if (!state.settings.includeMicrophone) requestedSources.push('system');
             let result: StartResult;
             try {
               result = await client.startSession({
                 language: state.settings.language,
-                sources: [],
+                sources: requestedSources,
                 mode: 'asr',
               });
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
-              // System capture can be briefly unavailable right after login. Fall back to the
-              // microphone immediately so captions still flow; do not wait 15s for a retry.
-              if (/system audio capture failed|no display/i.test(message)) {
+              // Microphone fallback is strictly opt-in: this tool's job is to caption system audio.
+              if (
+                state.settings.fallbackToMicrophone &&
+                /system audio capture failed|no display/i.test(message)
+              ) {
                 result = await client.startSession({
                   language: state.settings.language,
                   sources: ['microphone'],

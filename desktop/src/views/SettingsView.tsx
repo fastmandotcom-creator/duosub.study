@@ -209,6 +209,18 @@ export function SettingsView() {
           label={t('autostart')}
         />
         <Toggle
+          checked={settings.includeMicrophone}
+          onChange={(includeMicrophone) => setSettings({ includeMicrophone })}
+          label={t('includeMicrophone')}
+          hint="Tắt = chỉ nghe âm thanh hệ thống (Zoom/Meet/YouTube). Mặc định tắt."
+        />
+        <Toggle
+          checked={settings.fallbackToMicrophone}
+          onChange={(fallbackToMicrophone) => setSettings({ fallbackToMicrophone })}
+          label={t('fallbackToMicrophone')}
+          hint="Tắt = báo lỗi thay vì tự chuyển sang micro. Mặc định tắt."
+        />
+        <Toggle
           checked={settings.autoStartCaptions}
           onChange={(autoStartCaptions) => setSettings({ autoStartCaptions })}
           label={t('autoStartCaptions')}

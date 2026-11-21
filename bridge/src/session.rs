@@ -800,7 +800,7 @@ pub fn poll_response(bus: &EventBus, since: u64) -> PollResponse {
 }
 
 /// `GET /health` body — built per request so the active session stays current.
-pub fn health(model: &AsrModel, active: Option<SessionStatus>) -> HealthResponse {
+pub fn health(model: &AsrModel, active: Option<SessionStatus>, latest_seq: u64) -> HealthResponse {
     let host = crate::platform::platform_info();
     HealthResponse {
         ok: true,
@@ -822,6 +822,7 @@ pub fn health(model: &AsrModel, active: Option<SessionStatus>) -> HealthResponse
             system_audio_authorization()
         },
         apple_speech_available: apple_speech_available(),
+        latest_seq,
         platform: host.os.to_owned(),
         arch: host.arch.to_owned(),
         capture_backend: host.capture_backend.to_owned(),

@@ -300,7 +300,7 @@ async fn health(
         slot.session.as_ref().map(|s| s.status())
     };
     let model = state.model.read().unwrap();
-    let body: HealthResponse = build_health(&model, status);
+    let body: HealthResponse = build_health(&model, status, state.bus.latest_seq());
     json_ok(serde_json::to_value(&body).unwrap_or_default())
 }
 
@@ -508,12 +508,19 @@ async fn events(
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.contains("text/event-stream"));
 
-    let since = q.since.or_else(|| {
+    // `since=latest` means "subscribe to new events only" — no replay of the ring. Fresh clients
+    // (extension panel just opened, desktop app just started) must use it to avoid a caption flood.
+    let since_raw = q.since.or_else(|| {
         headers
             .get("last-event-id")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map(str::to_owned)
     });
+    let since = match since_raw.as_deref() {
+        Some(crate::bus::SINCE_LATEST) => Some(state.bus.latest_seq()),
+        Some(raw) => raw.trim().parse::<u64>().ok(),
+        None => None,
+    };
 
     // Any `/events` request is proof that a client is here: a poll refreshes the
     // reaper's liveness timestamp, an SSE connection also holds a subscriber slot for
@@ -546,8 +553,8 @@ async fn events(
 
 #[derive(Deserialize)]
 struct EventsQuery {
-    /// Last seq received — resume marker for both transports.
-    since: Option<u64>,
+    /// Last seq received, or the literal `latest` to skip all replay.
+    since: Option<String>,
     token: Option<String>,
 }
 

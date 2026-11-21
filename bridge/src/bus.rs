@@ -10,8 +10,13 @@ use tokio::sync::broadcast;
 
 use crate::contract::BridgeEvent;
 
-/// Replay window. ~30 s of real meeting traffic is far more than any reconnect needs.
-pub const RING_CAPACITY: usize = 2048;
+/// Replay window. A client reconnecting from a dropped SSE only needs a few seconds of catch-up;
+/// a large ring replays hundreds of old utterances on every fresh subscribe, flooding the caption
+/// queue and the browser's storage. 64 events (~10-15s of speech) is plenty for a reconnect and
+/// keeps memory flat. Clients that want to begin live should pass `since=latest`.
+pub const RING_CAPACITY: usize = 64;
+/// Sentinel: subscribe from the newest event only (no replay of history).
+pub const SINCE_LATEST: &str = "latest";
 /// Idle subscribers exceeding this miss nothing the ring holds; slower ones just lag into the poll
 /// path. Sized above the ring so a live consumer can always catch up from memory.
 pub const BROADCAST_CAPACITY: usize = 4096;

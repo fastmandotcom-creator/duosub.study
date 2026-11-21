@@ -121,6 +121,8 @@ pub struct HealthResponse {
     /// On-device Apple Speech can run on this host (macOS 26+). Lets the UI explain an
     /// unsupported pick up front instead of failing at session start.
     pub apple_speech_available: bool,
+    /// Last event seq — clients pass it as `?since=` to subscribe live without replaying history.
+    pub latest_seq: u64,
     /// Host platform description. Clients use it to show honest capability copy, not OS guesses.
     pub platform: String,
     pub arch: String,

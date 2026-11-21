@@ -253,6 +253,16 @@ export const useAppStore = create<AppState>()(
           });
           reconfigurePipeline();
           restartStream();
+          // Warm the ASR session once per launch. Do NOT gate this on the health fetch: the SSE
+          // connection can come up first, and waiting for a second HTTP round trip is exactly the
+          // delay users notice at startup.
+          if (get().onboardingDone && get().settings.autoStartCaptions) {
+            setTimeout(() => {
+              if (autoStartAttempted || get().sessionActive || get().starting) return;
+              autoStartAttempted = true;
+              void get().start();
+            }, 1500);
+          }
           void get().refreshHealth();
           // SSE onopen already flips the pill to online; health only needs a slow safety poll.
           healthTimer = setInterval(() => void get().refreshHealth(), 10_000);
@@ -322,18 +332,6 @@ export const useAppStore = create<AppState>()(
               lastError: '',
               ...(host !== get().host ? { host, capabilities: capabilitiesFor(host) } : {}),
             });
-            // Pre-warm once per launch so the first caption is not delayed by engine/audio setup.
-            if (
-              !autoStartAttempted &&
-              get().onboardingDone &&
-              get().settings.autoStartCaptions &&
-              !get().sessionActive &&
-              !get().starting &&
-              health.session?.active !== true
-            ) {
-              autoStartAttempted = true;
-              void get().start();
-            }
             return;
           } catch (error) {
             // First offline tick: ask the native shell to spawn the bundled/local bridge once.

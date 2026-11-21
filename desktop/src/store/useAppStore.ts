@@ -156,7 +156,8 @@ let pipeline: TranslationPipeline | null = null;
 let currentTranslator: Translator | null = null;
 let bridgeSpawnAttempted = false;
 let leaseTimer: ReturnType<typeof setInterval> | null = null;
-let autoRetryCount = 0;
+/** Timestamp of the last automatic (re)start attempt — retried every 15s, forever. */
+let lastAutoStartMs = 0;
 
 function buildTranslator(settings: Settings): Translator | null {
   if (settings.translationProvider === 'none') return new NoopTranslator();
@@ -382,9 +383,9 @@ export const useAppStore = create<AppState>()(
               !get().sessionActive &&
               !get().starting &&
               health.session?.active !== true &&
-              autoRetryCount < 6
+              Date.now() - lastAutoStartMs > 15_000
             ) {
-              autoRetryCount += 1;
+              lastAutoStartMs = Date.now();
               void get().start();
             }
             return;
@@ -495,24 +496,17 @@ export const useAppStore = create<AppState>()(
                 }
               });
             }, 10_000);
-            autoRetryCount = 0;
             if (get().settings.overlayEnabled) await get().setOverlayVisible(true);
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             set({ lastError: message, connection: 'error' });
-            // ScreenCaptureKit can briefly report "no display available" or a stale TCC state
-            // right after login. Retry quietly a few times instead of making the user click.
-            if (/system audio capture failed|no display|permission/i.test(message) && autoRetryCount < 3) {
-              autoRetryCount += 1;
-              setTimeout(() => void get().start(), 15_000);
-            }
+            // Retries are handled by the health poll's self-heal path (every 15s, no upper limit).
           } finally {
             set({ starting: false });
           }
         },
 
         stop: async () => {
-          autoRetryCount = 0;
           const state = get();
           // History is opt-in and intentionally tiny: long transcripts in localStorage were the
           // main source of UI lag on this machine.

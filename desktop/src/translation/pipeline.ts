@@ -47,7 +47,8 @@ export class TranslationPipeline {
 
   schedule(row: CaptionRow): void {
     const translator = this.translator;
-    if (translator === null || row.sourceText.trim() === '') return;
+    // A disabled translator is a no-op, not an error. Never show "Lỗi" on a raw caption.
+    if (translator === null || translator.id === 'none' || row.sourceText.trim() === '') return;
     const existing = this.pending.get(row.id);
     if (existing?.controller) existing.controller.abort();
     if (existing?.timer !== null && existing?.timer !== undefined) clearTimeout(existing.timer);

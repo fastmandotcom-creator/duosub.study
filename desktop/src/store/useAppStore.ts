@@ -543,10 +543,11 @@ export const useAppStore = create<AppState>()(
           let rows = get().rows;
           let seq = get().lastSeq;
           const now = Date.now();
+          const translateEnabled = get().settings.translationProvider !== 'none';
           for (const line of fresh) {
             seq += 1;
             rows = appendSystemLine(rows, line, seq, now);
-            pipeline?.schedule(rows[rows.length - 1]);
+            if (translateEnabled) pipeline?.schedule(rows[rows.length - 1]);
           }
           set({ systemLines: lines, rows, lastSeq: seq, lastError: '', connection: 'online' });
           emitCaption();
@@ -564,7 +565,7 @@ export const useAppStore = create<AppState>()(
               set({ rows });
               const changed = rows.find((row) => row.seq === event.seq);
               if (changed !== undefined) {
-                pipeline?.schedule(changed);
+                if (state.settings.translationProvider !== 'none') pipeline?.schedule(changed);
                 emitCaption();
               }
               break;

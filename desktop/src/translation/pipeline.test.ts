@@ -82,6 +82,18 @@ describe('translation pipeline', () => {
     expect(calls).toEqual(['first', 'second']);
   });
 
+  it('leaves raw captions untouched when translation is disabled', async () => {
+    const updates: TranslationState[] = [];
+    const pipeline = new TranslationPipeline(
+      { id: 'none', label: 'off', requiresKey: false, translate: async () => '' },
+      'vi',
+      { onUpdate: (_id, _text, state) => updates.push(state), debounceMs: 0 },
+    );
+    pipeline.schedule(row({ final: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(updates).toEqual([]);
+  });
+
   it('marks translation as error when the provider throws', async () => {
     const updates: TranslationState[] = [];
     const pipeline = new TranslationPipeline(

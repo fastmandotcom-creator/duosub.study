@@ -6,7 +6,7 @@ protocol on `http://127.0.0.1:4499`:
 | Path | Product | Role |
 | --- | --- | --- |
 | `bridge/` | DuoSub Bridge | headless macOS capture + on-device ASR + SSE stream |
-| `desktop/` | **DuoSub Desktop** | menubar app: UI, text translation, overlay, hotkeys, profiles, history |
+| `desktop/` | **DuoSub Desktop** | menubar app: Start/Stop captions, overlay, optional text translation |
 | `packages/caption-contract/` | `@duosub/caption-contract` | shared wire types + parsers (npm-publishable) |
 
 The LiveCode browser extension is a third client of the same bridge; its HTTP contract is pinned by

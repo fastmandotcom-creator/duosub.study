@@ -43,8 +43,9 @@ Four layers, one wire contract. Nothing above the bridge knows which OS it runs 
 
 1. **One caption protocol.** Golden bytes are pinned by Rust tests (`contract.rs`) and by TS tests
    (`packages/caption-contract`). A field rename fails both before it reaches a client.
-2. **One capture session.** The bridge keeps a single session slot; an advisory lease with TTL
-   heartbeat tells a second GUI client who owns it.
+2. **One capture session, one owner.** The bridge keeps a single session slot. A client that starts
+   it claims a lease and heartbeats every 10s (30s TTL). If the heartbeat stops, the bridge stops
+   the session and clears the slot — no capture survives a dead client, regardless of exit path.
 3. **Audio stays local in the desktop app.** Only recognised text goes to the cloud translator.
 4. **Capability, not OS sniffing.** Clients read `/health.platform`, `capture_backend`,
    `system_audio_supported` and `apple_speech_available` instead of `cfg!(macos)`-style guesses in UI.

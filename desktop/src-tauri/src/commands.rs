@@ -17,6 +17,11 @@ pub fn read_system_captions() -> Vec<String> {
 }
 
 #[tauri::command]
+pub fn open_accessibility_settings() {
+    platform::open_accessibility_settings();
+}
+
+#[tauri::command]
 pub fn host_info() -> serde_json::Value {
     serde_json::json!({
         "os": platform::host_os().as_str(),

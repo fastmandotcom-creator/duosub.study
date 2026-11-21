@@ -4,7 +4,7 @@ import { translate } from '../i18n';
 import { StatusPill } from '../components/StatusPill';
 import { formatTimestamp } from '../history/export';
 import { installHintFor } from '../bridge/install';
-import { writeTextToClipboard } from '../platform/tauri';
+import { invokeSafe, writeTextToClipboard } from '../platform/tauri';
 
 export function LiveView() {
   const rows = useAppStore((s) => s.rows);
@@ -74,6 +74,21 @@ export function LiveView() {
           )}
         </div>
       </header>
+
+      {captionEngine === 'system-live' && rows.length === 0 && (
+        <div className="alert warning">
+          <div>
+            <strong>{t('axPermissionNeeded')}</strong>
+            <p>{t('axPermissionHint')}</p>
+          </div>
+          <button
+            className="button primary"
+            onClick={() => void invokeSafe('open_accessibility_settings')}
+          >
+            {t('openAccessibility')}
+          </button>
+        </div>
+      )}
 
       {connection === 'offline' && captionEngine === 'bridge-asr' && (
         <div className="alert warning">

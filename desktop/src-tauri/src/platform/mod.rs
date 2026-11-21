@@ -74,6 +74,13 @@ pub fn read_system_captions() -> Vec<String> {
     return Vec::new();
 }
 
+pub fn open_accessibility_settings() {
+    #[cfg(target_os = "macos")]
+    macos::open_accessibility_settings();
+    #[cfg(not(target_os = "macos"))]
+    {}
+}
+
 /// Candidate paths for a locally installed bridge binary. Pure so it is testable on any host.
 pub fn bridge_candidates_for(
     env_binary: Option<String>,

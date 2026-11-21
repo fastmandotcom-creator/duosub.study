@@ -10,6 +10,7 @@ export function LiveView() {
   const rows = useAppStore((s) => s.rows);
   const sessionActive = useAppStore((s) => s.sessionActive);
   const starting = useAppStore((s) => s.starting);
+  const captionEngine = useAppStore((s) => s.settings.captionEngine);
   const connection = useAppStore((s) => s.connection);
   const health = useAppStore((s) => s.health);
   const lastError = useAppStore((s) => s.lastError);
@@ -41,7 +42,9 @@ export function LiveView() {
       <header className="view-header">
         <div>
           <h1>{t('tabLive')}</h1>
-          <p className="muted">{health?.model_id ?? t('bridgeMissing')}</p>
+          <p className="muted">
+            {captionEngine === 'system-live' ? t('systemLive') : (health?.model_id ?? t('bridgeMissing'))}
+          </p>
         </div>
         <div className="header-actions">
           <StatusPill />
@@ -51,21 +54,28 @@ export function LiveView() {
           <button className="button ghost" onClick={() => void copyTranscript()} disabled={rows.length === 0}>
             {t('copyTranscript')}
           </button>
-          <button
-            className={`button ${sessionActive ? 'danger' : 'primary'}`}
-            disabled={starting}
-            onClick={() => void (sessionActive ? stop() : start())}
-          >
-            {starting
-              ? t('startingCaptions')
-              : sessionActive
-                ? `■ ${t('stop')}`
-                : `▶ ${t('start')}`}
-          </button>
+          {captionEngine === 'system-live' ? (
+            <span className="status-pill status-live">
+              <span className="status-dot" />
+              {t('systemLive')}
+            </span>
+          ) : (
+            <button
+              className={`button ${sessionActive ? 'danger' : 'primary'}`}
+              disabled={starting}
+              onClick={() => void (sessionActive ? stop() : start())}
+            >
+              {starting
+                ? t('startingCaptions')
+                : sessionActive
+                  ? `■ ${t('stop')}`
+                  : `▶ ${t('start')}`}
+            </button>
+          )}
         </div>
       </header>
 
-      {connection === 'offline' && (
+      {connection === 'offline' && captionEngine === 'bridge-asr' && (
         <div className="alert warning">
           <div>
             <strong>{t('bridgeMissing')}</strong>
@@ -85,7 +95,7 @@ export function LiveView() {
         </div>
       )}
 
-      {permissionDenied && (
+      {permissionDenied && captionEngine === 'bridge-asr' && (
         <div className="alert warning">
           <div>
             <strong>{t('permissionNeeded')}</strong>

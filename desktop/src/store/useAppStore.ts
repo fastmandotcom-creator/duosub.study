@@ -2,7 +2,9 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import type { BridgeEvent, HealthResponse, StartResult } from '@duosub/caption-contract';
 import { BridgeClient, BridgeCallError, type BridgeConnectionState } from '../bridge/BridgeClient';
+import { newLines } from '../caption/systemCaptions';
 import {
+  appendSystemLine,
   applySegment,
   setTranslation,
   type CaptionRow,
@@ -37,6 +39,8 @@ export interface Settings {
   autoStartCaptions: boolean;
   /** Off by default: large saved transcripts were the main source of UI lag. */
   keepHistory: boolean;
+  /** Prefer the OS's own captions (no second ASR engine) on macOS. */
+  captionEngine: 'system-live' | 'bridge-asr';
 }
 
 export interface SessionRecord {
@@ -59,6 +63,7 @@ export interface AppState {
   health: HealthResponse | null;
   lastSeq: number;
   rows: CaptionRow[];
+  systemLines: string[];
   sessionId: string;
   sessionActive: boolean;
   starting: boolean;
@@ -84,6 +89,7 @@ export interface AppState {
   stop: () => Promise<void>;
   selectFamily: (family: string) => Promise<void>;
   handleEvent: (event: BridgeEvent) => void;
+  pollSystemCaptions: () => Promise<void>;
   setTranslation: (id: string, text: string, state: TranslationState) => void;
   openPermissionSettings: () => Promise<void>;
   setOverlayVisible: (visible: boolean) => Promise<void>;
@@ -120,6 +126,7 @@ export const DEFAULT_SETTINGS: Settings = {
   fontSize: 18,
   autoStartCaptions: true,
   keepHistory: false,
+  captionEngine: 'system-live',
 };
 
 const APP_VERSION = '1.0.0';
@@ -127,12 +134,17 @@ const STREAM_KEY = 'duosub.desktop.v1';
 
 /** Before the native shell answers, the UA is the only host hint available. */
 const INITIAL_HOST = detectHostOS(null, typeof navigator === 'undefined' ? '' : navigator.userAgent);
-const BASE_SETTINGS: Settings = { ...DEFAULT_SETTINGS, family: defaultFamilyFor(INITIAL_HOST) };
+const BASE_SETTINGS: Settings = {
+  ...DEFAULT_SETTINGS,
+  family: defaultFamilyFor(INITIAL_HOST),
+  captionEngine: INITIAL_HOST === 'macos' ? 'system-live' : 'bridge-asr',
+};
 
 let client = new BridgeClient(DEFAULT_SETTINGS.bridgeUrl, DEFAULT_SETTINGS.bridgeToken);
 let unsubscribeStream: (() => void) | null = null;
 let healthTimer: ReturnType<typeof setInterval> | null = null;
 let frontmostTimer: ReturnType<typeof setInterval> | null = null;
+let systemCaptionTimer: ReturnType<typeof setInterval> | null = null;
 let pipeline: TranslationPipeline | null = null;
 let currentTranslator: Translator | null = null;
 let bridgeSpawnAttempted = false;
@@ -191,6 +203,16 @@ export const useAppStore = create<AppState>()(
         });
       };
 
+      const startSystemPolling = () => {
+        if (systemCaptionTimer !== null) return;
+        systemCaptionTimer = setInterval(() => void get().pollSystemCaptions(), 500);
+        void get().pollSystemCaptions();
+      };
+      const stopSystemPolling = () => {
+        if (systemCaptionTimer !== null) clearInterval(systemCaptionTimer);
+        systemCaptionTimer = null;
+      };
+
       const reconfigurePipeline = () => {
         const state = get();
         currentTranslator = buildTranslator(state.settings);
@@ -214,6 +236,7 @@ export const useAppStore = create<AppState>()(
         health: null,
         lastSeq: 0,
         rows: [],
+        systemLines: [],
         sessionId: '',
         sessionActive: false,
         starting: false,
@@ -252,7 +275,8 @@ export const useAppStore = create<AppState>()(
           });
           reconfigurePipeline();
           restartStream();
-          // Auto-warm is driven by App's effect: it must run AFTER persist rehydration.
+          if (get().settings.captionEngine === 'system-live') startSystemPolling();
+          // Bridge auto-warm is driven by App's effect: it must run AFTER persist rehydration.
           void get().refreshHealth();
           // SSE onopen already flips the pill to online; health only needs a slow safety poll.
           healthTimer = setInterval(() => void get().refreshHealth(), 10_000);
@@ -294,6 +318,15 @@ export const useAppStore = create<AppState>()(
             patch.models !== undefined
           ) {
             reconfigurePipeline();
+          }
+          if (patch.captionEngine !== undefined) {
+            stopSystemPolling();
+            if (patch.captionEngine === 'system-live') {
+              set({ rows: [], systemLines: [], sessionId: '', sessionActive: false });
+              startSystemPolling();
+            } else {
+              set({ systemLines: [] });
+            }
           }
           if (patch.autostart !== undefined) {
             void invokeSafe('set_autostart', { enabled: patch.autostart });
@@ -483,6 +516,24 @@ export const useAppStore = create<AppState>()(
           }
         },
 
+        pollSystemCaptions: async () => {
+          if (get().settings.captionEngine !== 'system-live') return;
+          const lines = await invokeSafe<string[]>('read_system_captions');
+          if (lines === null) return;
+          const fresh = newLines(get().systemLines, lines);
+          if (fresh.length === 0) return;
+          let rows = get().rows;
+          let seq = get().lastSeq;
+          const now = Date.now();
+          for (const line of fresh) {
+            seq += 1;
+            rows = appendSystemLine(rows, line, seq, now);
+            pipeline?.schedule(rows[rows.length - 1]);
+          }
+          set({ systemLines: lines, rows, lastSeq: seq, lastError: '', connection: 'online' });
+          emitCaption();
+        },
+
         handleEvent: (event) => {
           if (event.seq <= get().lastSeq) return;
           set({ lastSeq: Math.max(get().lastSeq, event.seq) });
@@ -653,6 +704,8 @@ export function disposeApp(): void {
   unsubscribeStream = null;
   if (leaseTimer !== null) clearInterval(leaseTimer);
   leaseTimer = null;
+  if (systemCaptionTimer !== null) clearInterval(systemCaptionTimer);
+  systemCaptionTimer = null;
   pipeline?.cancelAll();
   void client.releaseOwner();
   healthTimer = null;

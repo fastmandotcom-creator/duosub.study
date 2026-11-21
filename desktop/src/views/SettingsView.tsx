@@ -81,6 +81,17 @@ export function SettingsView() {
             sẽ được thêm trong bridge/src/platform.rs.
           </div>
         )}
+        <label className="field narrow">
+          <span>{t('captionEngine')}</span>
+          <select
+            value={settings.captionEngine}
+            onChange={(e) => setSettings({ captionEngine: e.target.value as typeof settings.captionEngine })}
+          >
+            <option value="system-live">{t('systemLive')}</option>
+            <option value="bridge-asr">{t('bridgeAsr')}</option>
+          </select>
+          <small>{t('systemLive')} dùng text có sẵn của macOS — không tải model, không bật micro hay quyền Screen Recording.</small>
+        </label>
         <div className="field-grid">
           <label className="field">
             <span>{t('sourceLanguage')}</span>

@@ -65,6 +65,15 @@ pub fn frontmost_app() -> String {
     return String::new();
 }
 
+/// Current lines from macOS Live Captions, newest last. Empty on other hosts or when the feature
+/// is off. Reading the system's own transcript avoids running a second ASR engine entirely.
+pub fn read_system_captions() -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    return macos::read_system_captions();
+    #[cfg(not(target_os = "macos"))]
+    return Vec::new();
+}
+
 /// Candidate paths for a locally installed bridge binary. Pure so it is testable on any host.
 pub fn bridge_candidates_for(
     env_binary: Option<String>,

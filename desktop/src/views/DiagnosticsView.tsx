@@ -28,6 +28,7 @@ export function DiagnosticsView() {
     rowsInMemory: rows.length,
     lastError,
     host,
+    captionEngine: settings.captionEngine,
   });
 
   return (

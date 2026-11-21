@@ -64,6 +64,32 @@ export function applySegment(
   return updated.length > MAX_ROWS ? updated.slice(updated.length - MAX_ROWS) : updated;
 }
 
+/** A line read from macOS Live Captions becomes a normal, final caption row. */
+export function appendSystemLine(
+  rows: readonly CaptionRow[],
+  text: string,
+  seq: number,
+  nowMs: number,
+): CaptionRow[] {
+  const next: CaptionRow = {
+    id: `system-live:${seq}`,
+    sessionId: 'system-live',
+    segmentId: seq,
+    sourceText: text,
+    translatedText: '',
+    translationState: 'none',
+    final: true,
+    source: 'system-live',
+    language: 'auto',
+    t0Ms: nowMs,
+    t1Ms: nowMs,
+    seq,
+    vocabularyApplied: false,
+  };
+  const updated = [...rows, next];
+  return updated.length > MAX_ROWS ? updated.slice(updated.length - MAX_ROWS) : updated;
+}
+
 export function setTranslation(
   rows: readonly CaptionRow[],
   id: string,

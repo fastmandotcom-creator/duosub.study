@@ -136,6 +136,7 @@ function Onboarding() {
 export default function App() {
   const onboardingDone = useAppStore((s) => s.onboardingDone);
   const autoWarm = useAppStore((s) => s.settings.autoStartCaptions);
+  const captionEngine = useAppStore((s) => s.settings.captionEngine);
   const start = useAppStore((s) => s.start);
   const warmed = useRef(false);
   const view = useAppStore((s) => s.view);
@@ -150,10 +151,10 @@ export default function App() {
   // Runs after persist rehydration and after bootstrapApp, so the warm-up cannot be skipped by
   // StrictMode's double effect invocation (the ref guard makes it exactly once per launch).
   useEffect(() => {
-    if (!onboardingDone || !autoWarm || warmed.current) return;
+    if (!onboardingDone || !autoWarm || warmed.current || captionEngine !== 'bridge-asr') return;
     warmed.current = true;
     void start();
-  }, [onboardingDone, autoWarm, start]);
+  }, [onboardingDone, autoWarm, captionEngine, start]);
 
   if (!onboardingDone) return <Onboarding />;
 

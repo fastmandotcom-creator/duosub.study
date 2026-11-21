@@ -10,6 +10,7 @@ export interface DiagnosticContext {
   rowsInMemory: number;
   lastError: string;
   host: string;
+  captionEngine: string;
 }
 
 /** One-click support bundle. Deliberately plain text: easy to paste into an issue. */
@@ -20,6 +21,7 @@ export function buildDiagnosticReport(ctx: DiagnosticContext): string {
     'DuoSub Desktop — diagnostics',
     `generated               ${new Date().toISOString()}`,
     line('app version', ctx.appVersion),
+    line('caption engine', ctx.captionEngine),
     line('host (app)', ctx.host),
     line('host (bridge)', health?.platform ?? 'unknown'),
     line('arch', health?.arch ?? 'unknown'),

@@ -28,10 +28,7 @@ pub fn read_system_captions() -> Vec<String> {
 /// Opens the Accessibility pane so the user can grant the app permission to read Live Captions.
 pub fn open_accessibility_settings() {
     let _ = std::process::Command::new("open")
-        .args(["x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"])
-        .status();
-    let _ = std::process::Command::new("open")
-        .args(["-a", "System Settings"])
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
         .status();
 }
 

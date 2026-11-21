@@ -52,6 +52,9 @@ struct SlotState {
     session: Option<LiveSession>,
     /// A session start is in flight (engine build / audio open).
     starting: bool,
+    /// Owner id of THIS session, when the client claimed a lease. Lets the reaper stop a session
+    /// whose controller disappeared without a graceful /sessions/stop.
+    owner: Option<String>,
 }
 
 fn session_slot() -> &'static Mutex<SlotState> {
@@ -177,6 +180,30 @@ impl Drop for SseSubscriberGuard {
     }
 }
 
+/// Stop a session whose owning controller stopped heartbeating. This is the hard guarantee that
+/// no microphone/system capture survives a crashed or killed app, independent of exit handlers.
+fn reap_dead_owner_session(bus: &EventBus) -> Option<String> {
+    let now = now_ms_i64();
+    let mut slot = session_slot().lock().ok()?;
+    let owner = slot.owner.clone()?;
+    let missing = {
+        let leases = owner_slot().lock().ok()?;
+        match leases.as_ref() {
+            Some(lease) if lease.id == owner => lease_stale(lease.last_seen_ms, now),
+            _ => true, // owner lease was released or replaced by another controller
+        }
+    };
+    if !missing {
+        return None;
+    }
+    let mut session = slot.session.take()?;
+    let id = session.id.clone();
+    stop_session(bus, &mut session);
+    slot.owner = None;
+    eprintln!("duosub-bridge: session {id} stopped - owner '{owner}' heartbeat expired");
+    Some(id)
+}
+
 /// Reap an orphaned session: no SSE subscriber and no `/events` traffic for the whole
 /// window. Returns the reaped session id when it acted.
 fn reap_orphaned_session(bus: &EventBus) -> Option<String> {
@@ -197,8 +224,10 @@ fn reap_orphaned_session(bus: &EventBus) -> Option<String> {
     }
 
     let mut slot = session_slot().lock().ok()?;
-    let id = slot.session.as_ref()?.id.clone();
-    stop_session(bus, slot.session.as_mut()?);
+    let mut session = slot.session.take()?;
+    let id = session.id.clone();
+    stop_session(bus, &mut session);
+    slot.owner = None;
     eprintln!(
         "duosub-bridge: session {id} reaped - no live caption viewer for {}s (nobody listening; \
          capture + ASR engine released)",
@@ -218,6 +247,7 @@ fn spawn_idle_reaper(state: &AppState) {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(15));
         loop {
             tick.tick().await;
+            reap_dead_owner_session(&bus);
             reap_orphaned_session(&bus);
         }
     });
@@ -325,6 +355,7 @@ async fn sessions_start(
     let bus = state.bus.clone();
     let model = state.model.clone();
     let request = body.clone();
+    let owner = request.owner.clone();
     let build = tokio::task::spawn_blocking(move || {
         if request.mode == "capture" {
             // Raw PCM forwarding: no ASR engine, no model file read (the model lock is never
@@ -343,6 +374,11 @@ async fn sessions_start(
             let mut slot = session_slot().lock().unwrap();
             slot.session = Some(session);
             slot.starting = false;
+            slot.owner = if owner.trim().is_empty() {
+                None
+            } else {
+                Some(owner)
+            };
             json_created(json!({ "started": true, "sessionId": id, "warnings": warnings }))
         }
         Ok(Err(e)) => {
@@ -381,6 +417,7 @@ async fn sessions_stop(
     let taken = {
         let mut slot = session_slot().lock().unwrap();
         slot.starting = false; // a stop during an in-flight start clears the reservation.
+        slot.owner = None;
         slot.session.take()
     };
     match taken {

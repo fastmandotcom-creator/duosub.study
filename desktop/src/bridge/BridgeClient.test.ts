@@ -97,6 +97,26 @@ describe('BridgeClient', () => {
     expect(second.closed).toBe(true);
   });
 
+  it('starts at the newest seq for a fresh viewer and resumes on reconnect', () => {
+    vi.useFakeTimers();
+    const client = new BridgeClient();
+    let since = 0;
+    client.subscribe({
+      onEvent: () => undefined,
+      onState: () => undefined,
+      getSince: () => since,
+      fresh: true,
+    });
+    const first = FakeEventSource.instances[0];
+    expect(first.url).toContain('since=latest');
+    // Simulate a real event arriving, then a dropped connection.
+    first.emit('error', '{"seq":9,"ts":1,"kind":"error","message":"m"}');
+    first.onerror?.();
+    vi.advanceTimersByTime(1000);
+    const second = FakeEventSource.instances[1];
+    expect(second.url).toContain('since=9');
+  });
+
   it('detects a restarted bridge whose seq counter reset to zero', () => {
     vi.useFakeTimers();
     const client = new BridgeClient();

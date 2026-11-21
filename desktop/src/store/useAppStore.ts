@@ -177,9 +177,13 @@ export const useAppStore = create<AppState>()(
         unsubscribeStream = null;
         const state = get();
         client = new BridgeClient(state.settings.bridgeUrl, state.settings.bridgeToken);
+        // A fresh viewer must not replay the bridge's ring: that floods stale captions into the
+        // queue and the browser's storage. Start at the newest seq instead.
+        set({ lastSeq: 0, rows: [] });
         unsubscribeStream = client.subscribe({
           onEvent: (event) => get().handleEvent(event),
           onState: (connection) => set({ connection }),
+          fresh: true,
           getSince: () => get().lastSeq,
           onReset: () => {
             // New bridge process: its seq starts at 0 and the old utterances no longer exist.

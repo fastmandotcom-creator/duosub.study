@@ -27,6 +27,8 @@ export interface SubscribeHandlers {
   getSince?: () => number;
   /** Bridge process restarted, so its monotonic seq counter started over at 0. */
   onReset?: () => void;
+  /** First subscription of a fresh viewer: begin at the newest seq, no ring replay. */
+  fresh?: boolean;
 }
 
 const DEFAULT_BASE = 'http://127.0.0.1:4499';
@@ -227,6 +229,7 @@ export class BridgeClient {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let failures = 0;
     let lastSeq = handlers.getSince?.() ?? 0;
+    let firstConnect = handlers.fresh === true;
 
     const close = () => {
       source?.close();
@@ -237,7 +240,9 @@ export class BridgeClient {
       if (stopped) return;
       handlers.onState?.(failures === 0 ? 'checking' : 'reconnecting');
       try {
-        source = new EventSource(this.url('/events', { since: String(lastSeq) }));
+        // First connect: skip the ring entirely. Reconnects: resume from the last seen seq.
+        source = new EventSource(this.url('/events', { since: firstConnect ? 'latest' : String(lastSeq) }));
+        firstConnect = false;
       } catch (error) {
         handlers.onState?.('error');
         console.warn('[duosub] EventSource unavailable', error);

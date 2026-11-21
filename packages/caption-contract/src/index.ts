@@ -37,6 +37,8 @@ export interface HealthResponse {
   system_audio: SystemAudioState | string;
   /** macOS 26+ SpeechAnalyzer availability. Older bridges omit it → false. */
   apple_speech_available: boolean;
+  /** Last event seq — pass as `?since=latest` to subscribe without replaying history. */
+  latest_seq: number;
   /** Host platform description — clients must not infer capabilities from the OS string alone. */
   platform: 'macos' | 'windows' | 'linux' | 'unknown' | string;
   arch: string;
@@ -82,6 +84,7 @@ export function parseHealth(v: unknown): HealthResponse | null {
     supported_languages: asStringArray(o.supported_languages),
     system_audio: asString(o.system_audio) ?? 'denied',
     apple_speech_available: asBool(o.apple_speech_available),
+    latest_seq: asNumber(o.latest_seq) ?? 0,
     platform: asString(o.platform) ?? 'unknown',
     arch: asString(o.arch) ?? '',
     capture_backend: asString(o.capture_backend) ?? 'unknown',

@@ -21,7 +21,8 @@ export interface CaptionRow {
   vocabularyApplied: boolean;
 }
 
-export const MAX_ROWS = 500;
+/** Small ring: the UI only shows the last few utterances and RAM stays flat on long meetings. */
+export const MAX_ROWS = 80;
 
 export function rowId(sessionId: string, segmentId: number): string {
   return `${sessionId}:${segmentId}`;
@@ -78,6 +79,6 @@ export function clearSessionRows(rows: readonly CaptionRow[], sessionId?: string
   return sessionId === undefined ? [] : rows.filter((row) => row.sessionId !== sessionId);
 }
 
-export function visibleRows(rows: readonly CaptionRow[], limit = 40): CaptionRow[] {
+export function visibleRows(rows: readonly CaptionRow[], limit = 20): CaptionRow[] {
   return rows.slice(-limit);
 }

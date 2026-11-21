@@ -197,6 +197,18 @@ export function SettingsView() {
           onChange={(autostart) => setSettings({ autostart })}
           label={t('autostart')}
         />
+        <Toggle
+          checked={settings.autoStartCaptions}
+          onChange={(autoStartCaptions) => setSettings({ autoStartCaptions })}
+          label={t('autoStartCaptions')}
+          hint="App mở là tự bật phiên ASR; không phải đợi bấm nút."
+        />
+        <Toggle
+          checked={settings.keepHistory}
+          onChange={(keepHistory) => setSettings({ keepHistory })}
+          label={t('keepHistory')}
+          hint="Tối đa 3 phiên × 40 câu. Tắt = không ghi localStorage."
+        />
         <label className="field narrow">
           <span>{t('fontSize')}: {settings.fontSize}px</span>
           <input

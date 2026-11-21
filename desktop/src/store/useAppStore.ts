@@ -33,6 +33,10 @@ export interface Settings {
   showSource: boolean;
   includeSourceInExport: boolean;
   fontSize: number;
+  /** Pre-warm the ASR session at launch instead of waiting for the first button press. */
+  autoStartCaptions: boolean;
+  /** Off by default: large saved transcripts were the main source of UI lag. */
+  keepHistory: boolean;
 }
 
 export interface SessionRecord {
@@ -57,6 +61,7 @@ export interface AppState {
   rows: CaptionRow[];
   sessionId: string;
   sessionActive: boolean;
+  starting: boolean;
   lastError: string;
   warnings: string[];
   profiles: Profile[];
@@ -113,6 +118,8 @@ export const DEFAULT_SETTINGS: Settings = {
   showSource: true,
   includeSourceInExport: true,
   fontSize: 18,
+  autoStartCaptions: true,
+  keepHistory: false,
 };
 
 const APP_VERSION = '1.0.0';
@@ -130,6 +137,7 @@ let pipeline: TranslationPipeline | null = null;
 let currentTranslator: Translator | null = null;
 let bridgeSpawnAttempted = false;
 let leaseTimer: ReturnType<typeof setInterval> | null = null;
+let autoStartAttempted = false;
 
 function buildTranslator(settings: Settings): Translator | null {
   if (settings.translationProvider === 'none') return new NoopTranslator();
@@ -208,6 +216,7 @@ export const useAppStore = create<AppState>()(
         rows: [],
         sessionId: '',
         sessionActive: false,
+        starting: false,
         lastError: '',
         warnings: [],
         profiles: DEFAULT_PROFILES,
@@ -223,6 +232,16 @@ export const useAppStore = create<AppState>()(
 
         init: () => {
           if (pipeline !== null) return;
+          autoStartAttempted = false;
+          // Bound persisted data even if the user enabled history at some point in the past.
+          set({
+            sessions: get().settings.keepHistory
+              ? get().sessions.slice(0, 3).map((session) => ({
+                  ...session,
+                  rows: session.rows.slice(-40),
+                }))
+              : [],
+          });
           void invokeSafe<{ os: string }>('host_info').then((info) => {
             if (info?.os === undefined) return;
             const host = detectHostOS(info.os);
@@ -235,13 +254,14 @@ export const useAppStore = create<AppState>()(
           reconfigurePipeline();
           restartStream();
           void get().refreshHealth();
-          healthTimer = setInterval(() => void get().refreshHealth(), 5000);
+          // SSE onopen already flips the pill to online; health only needs a slow safety poll.
+          healthTimer = setInterval(() => void get().refreshHealth(), 10_000);
           frontmostTimer = setInterval(async () => {
             const name = await invokeSafe<string>('get_frontmost_app');
             if (typeof name === 'string' && name !== '' && name !== get().frontmostApp) {
               get().setFrontmostApp(name);
             }
-          }, 2500);
+          }, 5000);
 
           // Mirrored from the native side: tray / hotkeys ask the webview to change state.
           void import('../platform/tauri').then(({ listenSafe }) => {
@@ -302,6 +322,18 @@ export const useAppStore = create<AppState>()(
               lastError: '',
               ...(host !== get().host ? { host, capabilities: capabilitiesFor(host) } : {}),
             });
+            // Pre-warm once per launch so the first caption is not delayed by engine/audio setup.
+            if (
+              !autoStartAttempted &&
+              get().onboardingDone &&
+              get().settings.autoStartCaptions &&
+              !get().sessionActive &&
+              !get().starting &&
+              health.session?.active !== true
+            ) {
+              autoStartAttempted = true;
+              void get().start();
+            }
             return;
           } catch (error) {
             // First offline tick: ask the native shell to spawn the bundled/local bridge once.
@@ -328,7 +360,7 @@ export const useAppStore = create<AppState>()(
 
         start: async () => {
           const state = get();
-          set({ lastError: '', warnings: [] });
+          set({ lastError: '', warnings: [], starting: true });
           try {
             let health: HealthResponse;
             try {
@@ -391,12 +423,16 @@ export const useAppStore = create<AppState>()(
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             set({ lastError: message, connection: 'error' });
+          } finally {
+            set({ starting: false });
           }
         },
 
         stop: async () => {
           const state = get();
-          if (state.sessionId !== '' && state.rows.length > 0) {
+          // History is opt-in and intentionally tiny: long transcripts in localStorage were the
+          // main source of UI lag on this machine.
+          if (state.settings.keepHistory && state.sessionId !== '' && state.rows.length > 0) {
             const record: SessionRecord = {
               id: state.sessionId,
               startedAt: Date.now() - (state.rows.at(-1)?.t1Ms ?? 0),
@@ -404,9 +440,9 @@ export const useAppStore = create<AppState>()(
               language: state.settings.language,
               family: state.settings.family,
               profileId: state.activeProfileId,
-              rows: state.rows,
+              rows: state.rows.slice(-40),
             };
-            set({ sessions: [record, ...state.sessions].slice(0, 50) });
+            set({ sessions: [record, ...state.sessions].slice(0, 3) });
           }
           if (leaseTimer !== null) clearInterval(leaseTimer);
           leaseTimer = null;

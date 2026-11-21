@@ -88,7 +88,7 @@ input[type='range'] { padding: 0; accent-color: var(--accent); }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .status-live .status-dot, .status-online .status-dot { background: var(--accent); box-shadow: 0 0 0 4px #6ee7c822; }
 .status-live { color: var(--accent); border-color: var(--accent-dim); }
-.status-reconnecting .status-dot, .status-checking .status-dot { background: var(--warn); animation: pulse 1.2s infinite; }
+.status-reconnecting .status-dot, .status-checking .status-dot, .status-starting .status-dot { background: var(--warn); animation: pulse 1.2s infinite; }
 .status-error .status-dot, .status-offline .status-dot { background: var(--danger); }
 .status-model { color: var(--muted); font-weight: 400; border-left: 1px solid var(--line); padding-left: 8px; }
 @keyframes pulse { 50% { opacity: .3; } }

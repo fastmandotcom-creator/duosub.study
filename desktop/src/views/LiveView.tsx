@@ -9,6 +9,7 @@ import { writeTextToClipboard } from '../platform/tauri';
 export function LiveView() {
   const rows = useAppStore((s) => s.rows);
   const sessionActive = useAppStore((s) => s.sessionActive);
+  const starting = useAppStore((s) => s.starting);
   const connection = useAppStore((s) => s.connection);
   const health = useAppStore((s) => s.health);
   const lastError = useAppStore((s) => s.lastError);
@@ -52,9 +53,14 @@ export function LiveView() {
           </button>
           <button
             className={`button ${sessionActive ? 'danger' : 'primary'}`}
+            disabled={starting}
             onClick={() => void (sessionActive ? stop() : start())}
           >
-            {sessionActive ? `■ ${t('stop')}` : `▶ ${t('start')}`}
+            {starting
+              ? t('startingCaptions')
+              : sessionActive
+                ? `■ ${t('stop')}`
+                : `▶ ${t('start')}`}
           </button>
         </div>
       </header>

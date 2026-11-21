@@ -54,8 +54,8 @@ describe('caption engine', () => {
 
   it('caps the ring and returns only the newest rows for display', () => {
     let rows: readonly CaptionRow[] = [];
-    for (let i = 0; i < 505; i += 1) rows = applySegment(rows, segment({ segment_id: i }), i);
-    expect(rows).toHaveLength(500);
-    expect(visibleRows(rows, 2).map((row) => row.segmentId)).toEqual([503, 504]);
+    for (let i = 0; i < 85; i += 1) rows = applySegment(rows, segment({ segment_id: i }), i);
+    expect(rows).toHaveLength(80);
+    expect(visibleRows(rows, 2).map((row) => row.segmentId)).toEqual([83, 84]);
   });
 });

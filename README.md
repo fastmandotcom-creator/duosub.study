@@ -12,6 +12,9 @@ protocol on `http://127.0.0.1:4499`:
 The LiveCode browser extension is a third client of the same bridge; its HTTP contract is pinned by
 golden tests in both repositories.
 
+**Release:** push a tag `desktop-v*` — CI builds macOS/Windows/Linux installers and publishes them
+to GitHub Releases. Signing is optional (secrets only needed for signed artifacts).
+
 See [`desktop/README.md`](desktop/README.md) for the app, [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 for layer responsibilities, and [`docs/CROSS_PLATFORM.md`](docs/CROSS_PLATFORM.md) for the
 macOS / Windows / Linux port status. The bridge notes follow below.

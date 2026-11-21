@@ -9,6 +9,13 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::ShortcutState;
 
 pub fn run() {
+    // SIGTERM/SIGINT (dock force-quit, launchctl bootout, OS logout) do not produce Tauri's
+    // RunEvent::ExitRequested. Stop the bridge session from the signal path too.
+    let _ = ctrlc::set_handler(|| {
+        bridge::stop_session_before_exit();
+        std::process::exit(0);
+    });
+
     let shortcut_plugin = tauri_plugin_global_shortcut::Builder::new()
         .with_handler(|app, pressed, event| {
             if event.state() != ShortcutState::Pressed {

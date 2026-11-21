@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import type { BridgeEvent, HealthResponse } from '@duosub/caption-contract';
+import type { BridgeEvent, HealthResponse, StartResult } from '@duosub/caption-contract';
 import { BridgeClient, BridgeCallError, type BridgeConnectionState } from '../bridge/BridgeClient';
 import {
   applySegment,
@@ -383,11 +383,28 @@ export const useAppStore = create<AppState>()(
               set({ warnings: [translate(state.settings.locale, 'familyAutoRouted')] });
             }
 
-            const result = await client.startSession({
-              language: state.settings.language,
-              sources: [],
-              mode: 'asr',
-            });
+            let result: StartResult;
+            try {
+              result = await client.startSession({
+                language: state.settings.language,
+                sources: [],
+                mode: 'asr',
+              });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              // System capture can be briefly unavailable right after login. Fall back to the
+              // microphone immediately so captions still flow; do not wait 15s for a retry.
+              if (/system audio capture failed|no display/i.test(message)) {
+                result = await client.startSession({
+                  language: state.settings.language,
+                  sources: ['microphone'],
+                  mode: 'asr',
+                });
+                set({ warnings: [...get().warnings, 'Chỉ dùng micro — âm thanh hệ thống chưa sẵn.'] });
+              } else {
+                throw error;
+              }
+            }
             set({
               rows: [],
               sessionId: result.sessionId,

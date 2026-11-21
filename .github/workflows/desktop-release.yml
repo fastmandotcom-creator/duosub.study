@@ -81,10 +81,15 @@ jobs:
         env:
           DUOSUB_SIGN_IDENTITY: ${{ secrets.DUOSUB_SIGN_IDENTITY }}
           DUOSUB_NOTARY_PROFILE: ${{ secrets.DUOSUB_NOTARY_PROFILE }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash scripts/build-desktop.sh
 
       - name: Build MSI + NSIS (Windows)
         if: matrix.target == 'windows'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
       - name: Authenticode-sign MSI + NSIS (Windows)
@@ -100,6 +105,9 @@ jobs:
 
       - name: Build DEB + AppImage (Linux)
         if: matrix.target == 'linux'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
       - name: GPG-sign DEB + AppImage (Linux)
@@ -120,3 +128,4 @@ jobs:
             desktop/src-tauri/target/release/bundle/deb/*.deb
             desktop/src-tauri/target/release/bundle/appimage/*.AppImage
             desktop/src-tauri/target/release/bundle/appimage/*.AppImage.sig
+            desktop/src-tauri/target/release/bundle/**/latest.json

@@ -15,6 +15,7 @@ import { DEFAULT_PROFILES, matchProfile, type Profile } from '../profiles/profil
 import { translate, type Locale } from '../i18n';
 import { capabilitiesFor, defaultFamilyFor, detectHostOS, type HostCapabilities, type HostOS } from '../platform/os';
 import { CloudTranslator, NoopTranslator } from '../translation/cloudTranslator';
+import { resolveTranslationProvider } from '../translation/policy';
 import { TranslationPipeline } from '../translation/pipeline';
 import type { Translator, TranslationProvider } from '../translation/types';
 import { applyVocabulary, type VocabularyEntry } from '../vocabulary/vocabulary';
@@ -116,7 +117,9 @@ export const DEFAULT_SETTINGS: Settings = {
   language: 'auto',
   family: 'apple-speech',
   targetLanguage: 'vi',
-  translationProvider: 'gemini',
+  // Translation is OPT-IN. The app's job is to show captions captured on this machine; cloud
+  // translation only happens when the user explicitly enables it with their own API key.
+  translationProvider: 'none',
   apiKeys: { gemini: '', openai: '' },
   models: { gemini: '', openai: '' },
   overlayEnabled: true,
@@ -703,7 +706,12 @@ export const useAppStore = create<AppState>()(
             ...saved.settings,
             // Old persisted experiments must not silently change the caption engine or startup.
             captionEngine: 'bridge-asr',
-                      includeMicrophone: saved.settings?.includeMicrophone ?? false,
+            includeMicrophone: saved.settings?.includeMicrophone ?? false,
+            // No API key persisted → never silently attempt a cloud translation.
+            translationProvider: resolveTranslationProvider(
+              saved.settings?.translationProvider,
+              saved.settings?.apiKeys,
+            ),
             apiKeys: { ...DEFAULT_SETTINGS.apiKeys, ...saved.settings?.apiKeys },
             models: { ...DEFAULT_SETTINGS.models, ...saved.settings?.models },
           },

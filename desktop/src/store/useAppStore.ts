@@ -222,10 +222,7 @@ export const useAppStore = create<AppState>()(
         client = new BridgeClient(state.settings.bridgeUrl, state.settings.bridgeToken);
         unsubscribeStream = client.subscribe({
           onEvent: (event) => get().handleEvent(event),
-          onState: (connection) => {
-            set({ connection });
-            if (connection === 'online') ensureSession('stream-online');
-          },
+          onState: (connection) => set({ connection }),
           getSince: () => get().lastSeq,
           onReset: () => {
             // New bridge process: its seq starts at 0 and the old utterances no longer exist.
@@ -316,9 +313,20 @@ export const useAppStore = create<AppState>()(
           reconfigurePipeline();
           restartStream();
           if (get().settings.captionEngine === 'system-live') startSystemPolling();
-          // Ask once after the store is hydrated. SSE onopen is the other trigger; having both
-          // covers the case where EventSource was already open before init() ran.
-          ensureSession('stream-online');
+          // Deterministic warm-up: read /health directly instead of waiting for SSE onopen, which
+          // may have fired before the webview finished booting.
+          void client.health().then((health) => {
+            if (
+              get().onboardingDone &&
+              get().settings.autoStartCaptions &&
+              get().settings.captionEngine === 'bridge-asr' &&
+              !get().sessionActive &&
+              !get().starting &&
+              health.session?.active !== true
+            ) {
+              void get().start();
+            }
+          }).catch(() => undefined);
           void get().refreshHealth();
           // SSE onopen already flips the pill to online; health only needs a slow safety poll.
           healthTimer = setInterval(() => void get().refreshHealth(), 10_000);

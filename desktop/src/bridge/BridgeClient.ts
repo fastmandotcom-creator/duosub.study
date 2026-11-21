@@ -65,6 +65,24 @@ export class BridgeClient {
   }
 
   private async request(path: string, init: RequestInit = {}, timeoutMs = 4000): Promise<{ status: number; body: unknown }> {
+    // In the native app, route loopback HTTP through Rust: WKWebView intermittently fails fetch to
+    // 127.0.0.1 ("TypeError: Load failed") even while its EventSource keeps receiving captions.
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const raw = await invoke<unknown>('bridge_request', {
+        method: init.method ?? 'GET',
+        path,
+        body: typeof init.body === 'string' ? init.body : null,
+        token: this.token === '' ? null : this.token,
+        timeoutMs,
+      });
+      if (raw === null || raw === undefined) return { status: 200, body: null };
+      if (typeof raw === 'string' && raw.startsWith('HTTP ')) {
+        const [code, ...rest] = raw.split(': ');
+        throw new BridgeCallError(rest.join(': '), Number(code.replace('HTTP ', '')));
+      }
+      return { status: 200, body: raw };
+    }
     let response: Response | null = null;
     let lastError: unknown = null;
     // WebKit can fail a loopback fetch transiently ("TypeError: Load failed") while the bridge is

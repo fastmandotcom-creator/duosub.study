@@ -103,6 +103,7 @@ pub fn run() {
             commands::check_updates,
             bridge::start_bridge,
             commands::app_version,
+            commands::bridge_request,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DuoSub Desktop");

@@ -38,10 +38,13 @@
         "visible": false
       }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": null
+    }
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -50,5 +53,14 @@
       "icons/icon.ico",
       "icons/icon.png"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/fastmandotcom-creator/duosub.study/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM3N0JBMjZGMDhBQUUxNjgKUldSbzRhb0liNko3eHdNVmZ6Z1RQYm5IK05ScjU3NjhKcDJNeU4yVU5xOTgrOGUzTUJMcHM2eTYK",
+      "require_signed_version": true
+    }
   }
 }

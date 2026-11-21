@@ -65,20 +65,31 @@ export class BridgeClient {
   }
 
   private async request(path: string, init: RequestInit = {}, timeoutMs = 4000): Promise<{ status: number; body: unknown }> {
-    let response: Response;
-    try {
-      response = await fetch(this.url(path), {
-        ...init,
-        signal: AbortSignal.timeout(timeoutMs),
-        headers: {
-          ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-          ...(this.token !== '' ? { Authorization: `Bearer ${this.token}` } : {}),
-          ...init.headers,
-        },
-      });
-    } catch (error) {
+    let response: Response | null = null;
+    let lastError: unknown = null;
+    // WebKit can fail a loopback fetch transiently ("TypeError: Load failed") while the bridge is
+    // healthy. Retry a few times before declaring it offline.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        response = await fetch(this.url(path), {
+          ...init,
+          signal: AbortSignal.timeout(timeoutMs),
+          headers: {
+            ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+            ...(this.token !== '' ? { Authorization: `Bearer ${this.token}` } : {}),
+            ...init.headers,
+          },
+        });
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+      }
+    }
+    if (response === null) {
       throw new BridgeCallError(
-        `Không kết nối được bridge tại ${this.baseUrl}. Cài DuoSub hoặc bật ứng dụng trước. (${String(error)})`,
+        `Không kết nối được bridge tại ${this.baseUrl}. Cài DuoSub hoặc bật ứng dụng trước. (${String(lastError)})`,
       );
     }
     const text = await response.text();

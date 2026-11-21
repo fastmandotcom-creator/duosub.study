@@ -18,7 +18,12 @@ pub fn read_system_captions() -> Vec<String> {
 
 #[tauri::command]
 pub fn open_accessibility_settings() {
-    platform::open_accessibility_settings();
+    platform::request_accessibility_permission();
+}
+
+#[tauri::command]
+pub fn accessibility_status() -> bool {
+    platform::accessibility_status()
 }
 
 #[tauri::command]

@@ -95,6 +95,7 @@ pub fn run() {
             commands::get_frontmost_app,
             commands::read_system_captions,
             commands::open_accessibility_settings,
+            commands::accessibility_status,
             commands::host_info,
             commands::show_overlay,
             commands::set_autostart,

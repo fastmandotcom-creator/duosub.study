@@ -205,6 +205,9 @@ export const useAppStore = create<AppState>()(
 
       const startSystemPolling = () => {
         if (systemCaptionTimer !== null) return;
+        // Ask macOS for the Accessibility grant immediately: the system dialog is the only way
+        // the user can approve it, and finding the hidden pane manually wasted a lot of time.
+        void invokeSafe('open_accessibility_settings');
         systemCaptionTimer = setInterval(() => void get().pollSystemCaptions(), 500);
         void get().pollSystemCaptions();
       };

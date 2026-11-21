@@ -74,11 +74,18 @@ pub fn read_system_captions() -> Vec<String> {
     return Vec::new();
 }
 
-pub fn open_accessibility_settings() {
+pub fn request_accessibility_permission() {
     #[cfg(target_os = "macos")]
-    macos::open_accessibility_settings();
+    macos::ensure_accessibility_permission(true);
     #[cfg(not(target_os = "macos"))]
     {}
+}
+
+pub fn accessibility_status() -> bool {
+    #[cfg(target_os = "macos")]
+    return macos::ensure_accessibility_permission(false);
+    #[cfg(not(target_os = "macos"))]
+    return true;
 }
 
 /// Candidate paths for a locally installed bridge binary. Pure so it is testable on any host.

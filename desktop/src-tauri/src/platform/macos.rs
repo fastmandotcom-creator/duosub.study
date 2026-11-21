@@ -30,6 +30,9 @@ pub fn open_accessibility_settings() {
     let _ = std::process::Command::new("open")
         .args(["x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"])
         .status();
+    let _ = std::process::Command::new("open")
+        .args(["-a", "System Settings"])
+        .status();
 }
 
 pub fn frontmost_app() -> String {

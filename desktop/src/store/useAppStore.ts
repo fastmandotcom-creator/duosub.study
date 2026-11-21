@@ -138,6 +138,7 @@ let currentTranslator: Translator | null = null;
 let bridgeSpawnAttempted = false;
 let leaseTimer: ReturnType<typeof setInterval> | null = null;
 let autoStartAttempted = false;
+let autoRetryCount = 0;
 
 function buildTranslator(settings: Settings): Translator | null {
   if (settings.translationProvider === 'none') return new NoopTranslator();
@@ -414,16 +415,24 @@ export const useAppStore = create<AppState>()(
                 }
               });
             }, 10_000);
+            autoRetryCount = 0;
             if (get().settings.overlayEnabled) await get().setOverlayVisible(true);
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             set({ lastError: message, connection: 'error' });
+            // ScreenCaptureKit can briefly report "no display available" or a stale TCC state
+            // right after login. Retry quietly a few times instead of making the user click.
+            if (/system audio capture failed|no display|permission/i.test(message) && autoRetryCount < 3) {
+              autoRetryCount += 1;
+              setTimeout(() => void get().start(), 15_000);
+            }
           } finally {
             set({ starting: false });
           }
         },
 
         stop: async () => {
+          autoRetryCount = 0;
           const state = get();
           // History is opt-in and intentionally tiny: long transcripts in localStorage were the
           // main source of UI lag on this machine.

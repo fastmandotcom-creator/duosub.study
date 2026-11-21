@@ -314,6 +314,14 @@ export const useAppStore = create<AppState>()(
           const before = get().settings;
           const settings = { ...before, ...patch };
           set({ settings, lastError: '' });
+          const sourcesChanged =
+            (patch.includeMicrophone !== undefined && patch.includeMicrophone !== before.includeMicrophone) ||
+            (patch.fallbackToMicrophone !== undefined && patch.fallbackToMicrophone !== before.fallbackToMicrophone);
+          if (sourcesChanged && get().sessionActive) {
+            // The bridge only reads `sources` at session start; restart so flipping the toggle
+            // takes effect immediately instead of silently keeping the old stream.
+            void get().stop().then(() => get().start());
+          }
           if (
             patch.bridgeUrl !== undefined ||
             patch.bridgeToken !== undefined

@@ -10,18 +10,23 @@ export function StatusPill({ compact = false }: { compact?: boolean }) {
   const health = useAppStore((s) => s.health);
   const locale = useAppStore((s) => s.settings.locale);
 
+  // /health is the source of truth: a replayed caption list or a stale local flag must never
+  // claim a session is live when the bridge reports none.
+  const bridgeSessionActive = health?.session?.active === true;
   const state = starting
     ? 'starting'
-    : (captionEngine === 'system-live' && rowCount > 0) || (sessionActive && connection === 'online')
+    : (captionEngine === 'system-live' && rowCount > 0) || (sessionActive && bridgeSessionActive)
       ? 'live'
-      : connection;
+      : connection === 'online' && bridgeSessionActive
+        ? 'live'
+        : connection;
   const label =
     state === 'starting'
       ? translate(locale, 'starting')
       : state === 'live'
         ? translate(locale, 'online')
         : state === 'online'
-        ? 'Ready'
+        ? translate(locale, 'readyToStart')
         : state === 'checking'
           ? 'Checking…'
           : state === 'reconnecting'

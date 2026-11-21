@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import type { BridgeEvent, HealthResponse, StartResult } from '@duosub/caption-contract';
 import { BridgeClient, BridgeCallError, type BridgeConnectionState } from '../bridge/BridgeClient';
-import { shouldStartForTrigger } from '../session/lifecycle';
 import { newLines } from '../caption/systemCaptions';
 import {
   appendSystemLine,
@@ -36,8 +35,6 @@ export interface Settings {
   showSource: boolean;
   includeSourceInExport: boolean;
   fontSize: number;
-  /** Pre-warm the ASR session at launch instead of waiting for the first button press. */
-  autoStartCaptions: boolean;
   /** Off by default: large saved transcripts were the main source of UI lag. */
   keepHistory: boolean;
   /** Prefer the OS's own captions (no second ASR engine) on macOS. */
@@ -129,7 +126,6 @@ export const DEFAULT_SETTINGS: Settings = {
   showSource: true,
   includeSourceInExport: true,
   fontSize: 18,
-  autoStartCaptions: true,
   keepHistory: false,
   captionEngine: 'bridge-asr',
   includeMicrophone: false,
@@ -192,27 +188,6 @@ export const useAppStore = create<AppState>()(
           showSource: state.settings.showSource,
           fontSize: state.settings.fontSize,
         });
-      };
-
-      /** The only automatic way to start/restart a bridge session. */
-      const ensureSession = (trigger: 'stream-online' | 'session-stopped') => {
-        const state = get();
-        const wantsStart = shouldStartForTrigger(trigger, {
-          onboardingDone: state.onboardingDone,
-          autoStart: state.settings.autoStartCaptions,
-          engine: state.settings.captionEngine,
-          localActive: state.sessionActive,
-          starting: state.starting,
-        });
-        if (!wantsStart) return;
-        void client.health().then((health) => {
-          // /health is the authority: a session may already be running (started by another client).
-          if (health.session?.active === true) {
-            set({ sessionActive: true, sessionId: health.session.session_id ?? '' });
-            return;
-          }
-          void get().start();
-        }).catch(() => undefined);
       };
 
       const restartStream = () => {
@@ -286,12 +261,9 @@ export const useAppStore = create<AppState>()(
         capabilities: capabilitiesFor(INITIAL_HOST),
 
         init: () => {
-          // Idempotent: HMR can leave module-level timers/pipeline alive while a fresh React tree
-          // calls init() again. Always re-arm the session decision even if the rest is set up.
-          if (pipeline !== null) {
-            ensureSession('stream-online');
-            return;
-          }
+          // Idempotent: HMR can leave module-level timers alive while a fresh React tree calls
+          // init() again. Sessions are never started here — only the user's Start button does.
+          if (pipeline !== null) return;
           // Bound persisted data even if the user enabled history at some point in the past.
           set({
             sessions: get().settings.keepHistory
@@ -313,20 +285,6 @@ export const useAppStore = create<AppState>()(
           reconfigurePipeline();
           restartStream();
           if (get().settings.captionEngine === 'system-live') startSystemPolling();
-          // Deterministic warm-up: read /health directly instead of waiting for SSE onopen, which
-          // may have fired before the webview finished booting.
-          void client.health().then((health) => {
-            if (
-              get().onboardingDone &&
-              get().settings.autoStartCaptions &&
-              get().settings.captionEngine === 'bridge-asr' &&
-              !get().sessionActive &&
-              !get().starting &&
-              health.session?.active !== true
-            ) {
-              void get().start();
-            }
-          }).catch(() => undefined);
           void get().refreshHealth();
           // SSE onopen already flips the pill to online; health only needs a slow safety poll.
           healthTimer = setInterval(() => void get().refreshHealth(), 10_000);
@@ -614,10 +572,9 @@ export const useAppStore = create<AppState>()(
               // Only our own successful start() call sets sessionActive=true.
               break;
             case 'session_stopped':
-              set({ sessionActive: false });
-              // The bridge stopped the session on its own (orphan reaper / remote stop). This is
-              // one of only two automatic restart triggers.
-              ensureSession('session-stopped');
+              // Honest UI: the bridge stopped the session. Show the Start button; never restart
+              // silently behind the user's back.
+              set({ sessionActive: false, sessionId: '' });
               break;
             case 'error':
               set({ lastError: event.message });
@@ -746,8 +703,7 @@ export const useAppStore = create<AppState>()(
             ...saved.settings,
             // Old persisted experiments must not silently change the caption engine or startup.
             captionEngine: 'bridge-asr',
-            autoStartCaptions: true,
-            includeMicrophone: saved.settings?.includeMicrophone ?? false,
+                      includeMicrophone: saved.settings?.includeMicrophone ?? false,
             apiKeys: { ...DEFAULT_SETTINGS.apiKeys, ...saved.settings?.apiKeys },
             models: { ...DEFAULT_SETTINGS.models, ...saved.settings?.models },
           },

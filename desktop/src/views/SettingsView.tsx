@@ -221,12 +221,6 @@ export function SettingsView() {
           hint="Tắt = báo lỗi thay vì tự chuyển sang micro. Mặc định tắt."
         />
         <Toggle
-          checked={settings.autoStartCaptions}
-          onChange={(autoStartCaptions) => setSettings({ autoStartCaptions })}
-          label={t('autoStartCaptions')}
-          hint="App mở là tự bật phiên ASR; không phải đợi bấm nút."
-        />
-        <Toggle
           checked={settings.keepHistory}
           onChange={(keepHistory) => setSettings({ keepHistory })}
           label={t('keepHistory')}
